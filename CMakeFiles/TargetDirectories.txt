@@ -1,0 +1,9 @@
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/AuthoLASTVLADIO.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/edit_cache.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/rebuild_cache.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/list_install_components.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/install.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/install/local.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/install/strip.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/AuthoLASTVLADIO_autogen_timestamp_deps.dir
+S:/Qt Project/AuthoLASTVLADIO/CMakeFiles/AuthoLASTVLADIO_autogen.dir

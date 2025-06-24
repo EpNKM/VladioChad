@@ -8,13 +8,24 @@
 #include <QMessageBox>
 #include <QDateTime>
 #include <QBuffer>
+#include <QElapsedTimer>
+
+// Константы для аудио
+const int MIN_PACKET_MS = 20;
+const int MAX_PACKET_MS = 60;
+const int TARGET_QUEUE_SIZE = 3;
 
 ChatWindow::ChatWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::ChatWindow)
+    , currentPacketMs(40)
+    , packetLossRate(0.0)
+    , totalPackets(0)
+    , lostPackets(0)
+    , lastSequence(-1)
 {
     ui->setupUi(this);
-    setWindowTitle("Видеочат с улучшенной обработкой аудио");
+    setWindowTitle("VladioChat");
 
     // Инициализация
     instanceId = QUuid::createUuid().toString();
@@ -36,6 +47,7 @@ ChatWindow::ChatWindow(QWidget *parent)
     setupStatusButton();
 
     logMessage("Система готова. Ваш ник: " + localNickname);
+    logConnectionQuality();
     QTimer::singleShot(1000, this, &ChatWindow::sendDiscover);
 }
 
@@ -49,9 +61,64 @@ ChatWindow::~ChatWindow()
     delete ui;
 }
 
+void ChatWindow::logConnectionQuality()
+{
+    QString quality;
+    if (!isRemotePeerFound) {
+        quality = "Нет соединения";
+    }
+    else if (packetLossRate < 2.0) {
+        quality = "Качество связи: Отличное";
+    }
+    else if (packetLossRate < 5.0) {
+        quality = "Качество связи: Хорошее";
+    }
+    else if (packetLossRate < 10.0) {
+        quality = "Качество связи: Среднее";
+    }
+    else {
+        quality = "Качество связи: Плохое";
+    }
+
+    logMessage(quality + QString(" (Потери: %1%, Размер пакета: %2мс)")
+                             .arg(packetLossRate, 0, 'f', 1)
+                             .arg(currentPacketMs));
+}
+
+void ChatWindow::checkAudioTiming()
+{
+    if (!audioTimer.isValid()) {
+        audioTimer.start();
+        return;
+    }
+
+    if (audioTimer.elapsed() > 2000) {
+        QMutexLocker locker(&audioMutex);
+        int currentSize = audioQueue.size();
+
+        if (currentSize < TARGET_QUEUE_SIZE && currentPacketMs > MIN_PACKET_MS) {
+            currentPacketMs = qMax(MIN_PACKET_MS, currentPacketMs - 5);
+        }
+        else if (currentSize > TARGET_QUEUE_SIZE * 1.5 && currentPacketMs < MAX_PACKET_MS) {
+            currentPacketMs = qMin(MAX_PACKET_MS, currentPacketMs + 5);
+        }
+
+        audioTimer.restart();
+        logConnectionQuality();
+    }
+}
+
+void ChatWindow::updatePacketLossStats()
+{
+    if (totalPackets > 0) {
+        packetLossRate = (double)lostPackets / totalPackets * 100.0;
+        logConnectionQuality();
+    }
+}
+
 int ChatWindow::calculateAudioPacketSize() const
 {
-    return (audioFormat.sampleRate() * audioFormat.bytesPerFrame() * AUDIO_PACKET_MS) / 1000;
+    return (audioFormat.sampleRate() * audioFormat.bytesPerFrame() * currentPacketMs) / 1000;
 }
 
 void ChatWindow::setupTimers()
@@ -69,6 +136,11 @@ void ChatWindow::setupTimers()
     connect(keepAliveTimer, &QTimer::timeout, this, &ChatWindow::sendKeepAlive);
     keepAliveTimer->start(2000);
 
+    // Таймер для проверки аудио буфера
+    QTimer *audioCheckTimer = new QTimer(this);
+    connect(audioCheckTimer, &QTimer::timeout, this, &ChatWindow::checkAudioTiming);
+    audioCheckTimer->start(500);
+
     connect(udpSocket, &QUdpSocket::readyRead, this, &ChatWindow::readPendingDatagrams);
 }
 
@@ -83,7 +155,7 @@ void ChatWindow::initAudioDevices()
     cleanupAudio();
 
     // Универсальный формат аудио
-    audioFormat.setSampleRate(8000);
+    audioFormat.setSampleRate(48000);
     audioFormat.setChannelCount(1);
     audioFormat.setSampleFormat(QAudioFormat::Int16);
 
@@ -117,13 +189,13 @@ void ChatWindow::initAudioDevices()
 
     // Инициализация входа
     audioInput = new QAudioSource(inputDevice, audioFormat, this);
-    audioInput->setBufferSize(audioBufferSize * 2);
+    audioInput->setBufferSize(audioBufferSize * 3);
     audioInputDevice = audioInput->start();
     connect(audioInputDevice, &QIODevice::readyRead, this, &ChatWindow::sendAudioData);
 
     // Инициализация выхода
     audioOutput = new QAudioSink(outputDevice, audioFormat, this);
-    audioOutput->setBufferSize(audioBufferSize * 4);
+    audioOutput->setBufferSize(audioBufferSize * 6);
     audioOutputDevice = audioOutput->start();
 }
 
@@ -182,7 +254,7 @@ void ChatWindow::sendAudioData()
 
         QByteArray packet;
         QDataStream stream(&packet, QIODevice::WriteOnly);
-        stream << QString("AUDIO") << instanceId << localNickname << audioData;
+        stream << QString("AUDIO") << instanceId << localNickname << ++lastSequence << audioData;
 
         udpSocket->writeDatagram(packet, remoteAddress, remotePort);
     }
@@ -225,21 +297,33 @@ void ChatWindow::readPendingDatagrams()
 void ChatWindow::processAudioPacket(QDataStream &stream)
 {
     QString id, name;
+    qint64 sequence;
     QByteArray audioData;
-    stream >> id >> name >> audioData;
+    stream >> id >> name >> sequence >> audioData;
+
+    totalPackets++;
+
+    // Проверка пропущенных пакетов
+    if (lastSequence != -1 && sequence > lastSequence + 1) {
+        lostPackets += sequence - lastSequence - 1;
+        updatePacketLossStats();
+    }
+    lastSequence = sequence;
 
     if (id == instanceId || !audioOutputDevice) return;
 
-    int expectedSize = calculateAudioPacketSize();
-    if (abs(audioData.size() - expectedSize) > (expectedSize * 0.1)) {
-        logMessage("Некорректный размер аудио пакета. Получено: " +
-                   QString::number(audioData.size()) + ", ожидалось: " +
-                   QString::number(expectedSize));
-        return;
+    QMutexLocker locker(&audioMutex);
+    audioQueue.enqueue(audioData);
+
+    // Поддерживаем оптимальный размер очереди
+    while (audioQueue.size() > TARGET_QUEUE_SIZE * 2) {
+        audioQueue.dequeue();
     }
 
-    QMutexLocker locker(&audioMutex);
-    audioOutputDevice->write(audioData.constData(), qMin(audioData.size(), expectedSize));
+    // Воспроизводим, если накопилось достаточно данных
+    if (audioQueue.size() >= TARGET_QUEUE_SIZE) {
+        audioOutputDevice->write(audioQueue.dequeue());
+    }
 }
 
 void ChatWindow::processDiscoverPacket(QDataStream &stream, const QHostAddress &senderAddr)
@@ -259,6 +343,7 @@ void ChatWindow::processDiscoverPacket(QDataStream &stream, const QHostAddress &
     isRemotePeerFound = true;
     missedPings = 0;
     logMessage("Обнаружен участник: " + name + " (" + senderAddr.toString() + ")");
+    logConnectionQuality();
 }
 
 void ChatWindow::processDiscoverReply(QDataStream &stream, const QHostAddress &senderAddr)
@@ -273,14 +358,25 @@ void ChatWindow::processDiscoverReply(QDataStream &stream, const QHostAddress &s
     isRemotePeerFound = true;
     missedPings = 0;
     logMessage("Подключено к участнику: " + name + " (" + senderAddr.toString() + ")");
+    logConnectionQuality();
 }
 
 void ChatWindow::processKeepAlive(QDataStream &stream, const QHostAddress &senderAddr)
 {
     QString id, name;
-    stream >> id >> name;
+    qint64 timestamp;
+    stream >> id >> name >> timestamp;
 
-    if (id == instanceId) return;
+    // Рассчитываем сетевую задержку
+    qint64 delay = QDateTime::currentMSecsSinceEpoch() - timestamp;
+
+    // Адаптируем размер пакета на основе задержки
+    if (delay > 100 && currentPacketMs < MAX_PACKET_MS) {
+        currentPacketMs = qMin(MAX_PACKET_MS, currentPacketMs + 5);
+    }
+    else if (delay < 50 && currentPacketMs > MIN_PACKET_MS) {
+        currentPacketMs = qMax(MIN_PACKET_MS, currentPacketMs - 5);
+    }
 
     missedPings = 0;
     if (!isRemotePeerFound || remoteAddress != senderAddr) {
@@ -340,7 +436,7 @@ void ChatWindow::sendKeepAlive()
     if (isRemotePeerFound && !remoteAddress.isNull()) {
         QByteArray data;
         QDataStream stream(&data, QIODevice::WriteOnly);
-        stream << QString("KEEPALIVE") << instanceId << localNickname;
+        stream << QString("KEEPALIVE") << instanceId << localNickname << QDateTime::currentMSecsSinceEpoch();
         udpSocket->writeDatagram(data, remoteAddress, remotePort);
     } else {
         sendDiscover();
@@ -373,10 +469,17 @@ void ChatWindow::showStatus()
 {
     QString status = QString("Статус системы:\n"
                              "Соединение: %1\n"
-                             "Участник: %2\n"
-                             "IP: %3\n"
-                             "Формат аудио: %4 Hz, %5 каналов\n")
+                             "Качество связи: %2\n"
+                             "Размер пакета: %3 мс\n"
+                             "Потери пакетов: %4%\n"
+                             "Участник: %5\n"
+                             "IP: %6\n"
+                             "Формат аудио: %7 Hz, %8 каналов\n")
                          .arg(isRemotePeerFound ? "Подключено" : "Не подключено")
+                         .arg(packetLossRate < 2 ? "Отличное" :
+                                  packetLossRate < 5 ? "Хорошее" : "Плохое")
+                         .arg(currentPacketMs)
+                         .arg(packetLossRate, 0, 'f', 1)
                          .arg(remoteNickname)
                          .arg(remoteAddress.toString())
                          .arg(audioFormat.sampleRate())
@@ -391,8 +494,18 @@ void ChatWindow::resetConnection()
     remoteAddress = QHostAddress();
     remoteNickname.clear();
     missedPings = 0;
+    packetLossRate = 0.0;
+    totalPackets = 0;
+    lostPackets = 0;
+    lastSequence = -1;
+
+    {
+        QMutexLocker locker(&audioMutex);
+        audioQueue.clear();
+    }
 
     logMessage("Соединение сброшено");
+    logConnectionQuality();
     ui->chatArea->append("<i>Соединение потеряно</i>");
 }
 

@@ -1,0 +1,79 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Release-1b3919e62d8512bb3ea5.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"name" : "Release",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "AuthoLASTVLADIO",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "AuthoLASTVLADIO::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-AuthoLASTVLADIO-Release-f2876c1e87565355bc77.json",
+					"name" : "AuthoLASTVLADIO",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "AuthoLASTVLADIO_autogen::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-AuthoLASTVLADIO_autogen-Release-377119f3b523d50e72b2.json",
+					"name" : "AuthoLASTVLADIO_autogen",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "AuthoLASTVLADIO_autogen_timestamp_deps::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-AuthoLASTVLADIO_autogen_timestamp_deps-Release-a9a5c0b4b9417ce63f99.json",
+					"name" : "AuthoLASTVLADIO_autogen_timestamp_deps",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release",
+		"source" : "S:/Qt Project/AuthoLASTVLADIO"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 8
+	}
+}

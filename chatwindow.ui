@@ -123,12 +123,4 @@
   </widget>
  </widget>
  <resources/>
- <connections>
-<connection>
-    <sender>sendButton</sender>
-    <signal>clicked()</signal>
-    <receiver>ChatWindow</receiver>
-    <slot>on_sendButton_clicked()</slot>
-</connection>
- </connections>
 </ui>

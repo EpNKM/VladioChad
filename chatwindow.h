@@ -15,6 +15,8 @@
 #include <QTimer>
 #include <QNetworkDatagram>
 #include <QScrollBar>
+#include <QMediaDevices>
+#include <QCameraDevice>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class ChatWindow; }
@@ -49,6 +51,9 @@ private:
     bool isRemotePeerFound = false;
     int missedPings = 0;
 
+    void checkAudioTiming();
+    void updatePacketLossStats();
+
     // Audio
     QAudioFormat audioFormat;
     QAudioSource *audioInput = nullptr;
@@ -73,6 +78,19 @@ private:
     const int remotePort = 45454;
     const int MAX_MISSED_PINGS = 3;
     const int AUDIO_PACKET_MS = 40;
+    QQueue<QByteArray> audioQueue;
+    QElapsedTimer audioTimer;
+    int currentPacketMs;
+    const int MIN_PACKET_MS = 20;
+    const int MAX_PACKET_MS = 60;
+    const int TARGET_QUEUE_SIZE = 3;
+
+    double packetLossRate;
+    int totalPackets;
+    int lostPackets;
+    qint64 lastSequence;
+
+    void logConnectionQuality();
 
     void setupTimers();
     void setupAudioVideo();

@@ -1,0 +1,28 @@
+# ninja log v6
+107	2128	7724748403046869	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/cmake_install.cmake	5cca32c0af9789e8
+129	494	7724820337315285	AuthoLASTVLADIO_autogen/timestamp	cb05f9c3f4edba4f
+129	494	7724820337315285	AuthoLASTVLADIO_autogen/mocs_compilation.cpp	cb05f9c3f4edba4f
+129	494	7724820337315285	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/AuthoLASTVLADIO_autogen/timestamp	cb05f9c3f4edba4f
+2906	7436	7724750288140632	CMakeFiles/AuthoLASTVLADIO.dir/AuthoLASTVLADIO_autogen/mocs_compilation.cpp.obj	28de31864385a2c0
+129	494	7724820337315285	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/AuthoLASTVLADIO_autogen/mocs_compilation.cpp	cb05f9c3f4edba4f
+495	5370	7724820340985293	CMakeFiles/AuthoLASTVLADIO.dir/main.cpp.obj	7d9a888f2129ed37
+107	2128	7724748403206878	build.ninja	5cca32c0af9789e8
+502	6725	7724820341045289	CMakeFiles/AuthoLASTVLADIO.dir/chatwindow.cpp.obj	7afd0d5e1de76687
+6726	7379	7724820403285291	AuthoLASTVLADIO.exe	1941b1bd4721bd29
+104	565	7724850015781305	AuthoLASTVLADIO_autogen/timestamp	cb05f9c3f4edba4f
+104	565	7724850015781305	AuthoLASTVLADIO_autogen/mocs_compilation.cpp	cb05f9c3f4edba4f
+104	565	7724850015781305	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/AuthoLASTVLADIO_autogen/timestamp	cb05f9c3f4edba4f
+104	565	7724850015781305	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/AuthoLASTVLADIO_autogen/mocs_compilation.cpp	cb05f9c3f4edba4f
+566	6597	7724850020411318	CMakeFiles/AuthoLASTVLADIO.dir/main.cpp.obj	7d9a888f2129ed37
+598	7633	7724850020731295	CMakeFiles/AuthoLASTVLADIO.dir/chatwindow.cpp.obj	7afd0d5e1de76687
+7633	8633	7724850091081306	AuthoLASTVLADIO.exe	1941b1bd4721bd29
+245	663	7724851516395159	AuthoLASTVLADIO_autogen/timestamp	cb05f9c3f4edba4f
+245	663	7724851516395159	AuthoLASTVLADIO_autogen/mocs_compilation.cpp	cb05f9c3f4edba4f
+245	663	7724851516395159	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/AuthoLASTVLADIO_autogen/timestamp	cb05f9c3f4edba4f
+245	663	7724851516395159	S:/Qt Project/AuthoLASTVLADIO/build/Desktop_Qt_6_9_0_shared_MinGW_w64_MINGW64_MSYS2-Release/AuthoLASTVLADIO_autogen/mocs_compilation.cpp	cb05f9c3f4edba4f
+664	5989	7724851520585157	CMakeFiles/AuthoLASTVLADIO.dir/main.cpp.obj	7d9a888f2129ed37
+5989	6698	7724851573825181	AuthoLASTVLADIO.exe	1941b1bd4721bd29
+100	4817	7724859218727706	CMakeFiles/AuthoLASTVLADIO.dir/main.cpp.obj	7d9a888f2129ed37
+4818	5458	7724859265907728	AuthoLASTVLADIO.exe	1941b1bd4721bd29
+102	4924	7724869144547324	CMakeFiles/AuthoLASTVLADIO.dir/main.cpp.obj	7d9a888f2129ed37
+4925	5578	7724869192777336	AuthoLASTVLADIO.exe	1941b1bd4721bd29
