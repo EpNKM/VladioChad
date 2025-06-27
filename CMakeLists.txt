@@ -9,8 +9,8 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets GUI Core)
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets GUI Core)
+find_package(QT NAMES Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets GUI Core Charts)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Multimedia MultimediaWidgets GUI Core Charts)
 
 set(PROJECT_SOURCES
         main.cpp
@@ -42,7 +42,7 @@ else()
     endif()
 endif()
 
-target_link_libraries(AuthoLASTVLADIO PRIVATE Qt6::Widgets Qt6::Network Qt6::Multimedia Qt6::MultimediaWidgets Qt6::Gui Qt6::Core )
+target_link_libraries(AuthoLASTVLADIO PRIVATE Qt6::Widgets Qt6::Network Qt6::Multimedia Qt6::MultimediaWidgets Qt6::Gui Qt6::Core Qt6::Charts)
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
 # If you are developing for iOS or macOS you should consider setting an

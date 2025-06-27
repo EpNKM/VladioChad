@@ -8,6 +8,8 @@
 int main(int argc, char *argv[])
 {
     qputenv("QT_MEDIA_BACKEND", "windows");
+
+    QApplication a(argc, argv);
     QString appDir = QApplication::applicationDirPath();
     QCoreApplication::addLibraryPath(appDir + "/plugins");
     QCoreApplication::addLibraryPath(appDir + "/multimedia");
@@ -18,7 +20,6 @@ int main(int argc, char *argv[])
     QCoreApplication::addLibraryPath(appDir + "/generic");
     QCoreApplication::addLibraryPath(appDir + "/mediaservice");
 
-    QApplication a(argc, argv);
 
 
     ChatWindow w;
