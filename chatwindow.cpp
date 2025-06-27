@@ -10,12 +10,15 @@
 #include <QBuffer>
 #include <QElapsedTimer>
 #include <QThread>
+#include <QFile>
 
 ChatWindow::ChatWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::ChatWindow)
     , videoBufferTargetSize(20)
     , maxBufferSize(100)
+    ,disconnectDetectionTimer(new QTimer(this))
+    ,lastPacketTime()
 {
     ui->setupUi(this);
     setWindowTitle("VladioChat");
@@ -111,6 +114,16 @@ ChatWindow::ChatWindow(QWidget *parent)
 
     QThread::currentThread()->setPriority(QThread::HighPriority);
 
+    disconnectDetectionTimer->setInterval(2000);
+    connect(disconnectDetectionTimer, &QTimer::timeout, this, [this](){
+        if(isRemotePeerFound && lastPacketTime.elapsed() > 5000) {
+            handleNetworkLoss();
+        }
+    });
+    disconnectDetectionTimer->start();
+
+    lastPacketTime.start(); // Запуск таймера
+
 }
 
 ChatWindow::~ChatWindow()
@@ -122,7 +135,45 @@ ChatWindow::~ChatWindow()
     }
     delete chartView;
     delete bitrateChart;
+    if(disconnectDetectionTimer) {
+        disconnectDetectionTimer->stop();
+        delete disconnectDetectionTimer;
+    }
     delete ui;
+}
+
+void ChatWindow::handleNetworkLoss() {
+    QMutexLocker locker(&videoMutex);
+
+    // Проверяем, действительно ли нет пакетов
+    if(lastPacketTime.elapsed() <= 7000) { // Добавляем гистерезис
+        return;
+    }
+
+    isRemotePeerFound = false;
+    logMessage("Обнаружена потеря сети");
+
+    // Не очищаем буфер полностью, только уменьшаем размер
+    if(videoBuffer.size() > 5) {
+        QMap<qint64, VideoFrame> preserved;
+        auto it = videoBuffer.end();
+        for(int i = 0; i < 5 && it != videoBuffer.begin(); ++i) {
+            --it;
+            preserved.insert(it.key(), it.value());
+        }
+        videoBuffer = preserved;
+    }
+}
+
+void ChatWindow::preserveKeyFrames()
+{
+    QMap<qint64, VideoFrame> preserved;
+    for(auto it = videoBuffer.begin(); it != videoBuffer.end(); ++it) {
+        if(it.value().isKeyFrame) {
+            preserved.insert(it.key(), it.value());
+        }
+    }
+    videoBuffer = preserved;
 }
 
 void ChatWindow::updateBitrateChart()
@@ -170,6 +221,17 @@ void ChatWindow::updateBitrateChart()
                                .arg(sentKbps, 0, 'f', 1)
                                .arg(receivedKbps, 0, 'f', 1)
                                .arg(bufferFillPercent));
+}
+
+void ChatWindow::recoveryQualityManagement()
+{
+    // Постепенное повышение качества
+    QTimer::singleShot(30000, this, [this](){ // Через 30 сек
+        if(isRemotePeerFound) {
+            videoBufferTargetSize = 30; // Возвращаем нормальный размер
+            maxBufferSize = 45;
+        }
+    });
 }
 
 void ChatWindow::setVideoBufferSize(int size) {
@@ -446,6 +508,7 @@ void ChatWindow::readPendingDatagrams()
     while (udpSocket->hasPendingDatagrams()) {
         QNetworkDatagram datagram = udpSocket->receiveDatagram();
         totalBytesReceived += datagram.data().size();
+        lastPacketTime.restart(); // Обновляем время последнего пакета
 
         if (!datagram.isValid() || isLocalAddress(datagram.senderAddress())) {
             continue;
@@ -510,16 +573,16 @@ void ChatWindow::logNetworkStats() {
     double dropRate = framesDisplayed > 0 ?
                           (double)framesDropped / (framesDisplayed + framesDropped) * 100 : 0;
 
-    logMessage(QString("Видеостатистика:\n"
+    logMessage(QString("Статистика:\n"
                        "Кадры: %1/сек | Потери: %2%\n"
-                       "Буфер: %3/%4 (макс %5)\n"
-                       "Ручной размер: %6 кадров")
+                       "Буфер: %3/%4 | Последний пакет: %5 мс назад\n"
+                       "Состояние: %6")
                    .arg(framesDisplayed / 5.0, 0, 'f', 1)
                    .arg(dropRate, 0, 'f', 1)
                    .arg(videoBuffer.size())
                    .arg(videoBufferTargetSize)
-                   .arg(maxBufferSize)
-                   .arg(ui->bufferSizeSpinBox->value()));
+                   .arg(lastPacketTime.elapsed())
+                   .arg(isRemotePeerFound ? "Подключено" : "Отключено"));
 
     framesDisplayed = 0;
     framesDropped = 0;
@@ -550,6 +613,11 @@ void ChatWindow::processDiscoverReply(QDataStream &stream, const QHostAddress &s
     stream >> id >> name;
 
     if (id == instanceId || isRemotePeerFound) return; // Добавляем проверку isRemotePeerFound
+
+    if(isRemotePeerFound && remoteNickname == name) {
+        lastPacketTime.restart();
+        return;
+    }
 
     resetConnectionState();
     remoteAddress = senderAddr;
@@ -584,6 +652,8 @@ void ChatWindow::processVideoPacket(QDataStream &stream) {
     stream >> id >> name >> sequence >> isKeyFrame >> imageData;
 
     if (id == instanceId) return;
+
+    lastPacketTime.restart();
 
     QMutexLocker locker(&videoMutex);
 
@@ -630,6 +700,16 @@ void ChatWindow::processTextMessage(QDataStream &stream)
 
     if (id != instanceId) {
         ui->chatArea->append("<b>" + name + ":</b> " + text);
+    }
+}
+
+void ChatWindow::emergencySave()
+{
+    if(!videoBuffer.isEmpty()) {
+        QFile frameCache("last_frame.dat");
+        if(frameCache.open(QIODevice::WriteOnly)) {
+            frameCache.write(videoBuffer.last().data);
+        }
     }
 }
 

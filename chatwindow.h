@@ -142,6 +142,15 @@ private:
     QTimer *connectionTimer;
     QTimer *keepAliveTimer;
 
+    QTimer* disconnectDetectionTimer;
+    QElapsedTimer lastPacketTime; // Заменяем lastPacketTimestamp если нужно
+
+    // Методы
+    void handleNetworkLoss();
+    void recoveryQualityManagement();
+    void emergencySave();
+    void preserveKeyFrames();
+
     // Constants
     const int localPort = 45454;
     const int remotePort = 45454;
