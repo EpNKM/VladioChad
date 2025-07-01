@@ -81,7 +81,6 @@ private:
     void paintEvent(QPaintEvent *event) override;
     QPixmap lastGoodFrame;
 
-
     QChart *bitrateChart;
     QLineSeries *bitrateSeries;
     QChartView *chartView;

@@ -124,6 +124,18 @@ ChatWindow::ChatWindow(QWidget *parent)
 
     lastPacketTime.start(); // Запуск таймера
 
+    connect(videoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
+        QImage image = frame.toImage();
+        if (!image.isNull()) {
+            QPixmap pixmap = QPixmap::fromImage(image.scaled(
+                ui->localVideoLabel->size(),
+                Qt::KeepAspectRatio,
+                Qt::SmoothTransformation
+                ));
+            ui->localVideoLabel->setPixmap(pixmap);
+        }
+    });
+
 }
 
 ChatWindow::~ChatWindow()
