@@ -10,50 +10,28 @@
 #include <QBuffer>
 #include <QElapsedTimer>
 #include <QThread>
-#include <QFile>
+
+// Константы для аудио
+const int MIN_PACKET_MS = 20;
+const int MAX_PACKET_MS = 60;
+const int TARGET_QUEUE_SIZE = 3;
 
 ChatWindow::ChatWindow(QWidget *parent)
     : QMainWindow(parent)
     , ui(new Ui::ChatWindow)
-    , videoBufferTargetSize(20)
-    , maxBufferSize(100)
-    ,disconnectDetectionTimer(new QTimer(this))
-    ,lastPacketTime()
+    , currentPacketMs(40)
+    , packetLossRate(0.0)
+    , totalPackets(0)
+    , lostPackets(0)
+    , lastSequence(-1)
+    , isConnectionBad(false)
+    , lastPacketTime(0)
+    ,audioInput(nullptr), audioOutput(nullptr),
+    camera(nullptr), captureSession(nullptr),
+    videoSink(nullptr)
 {
     ui->setupUi(this);
     setWindowTitle("VladioChat");
-
-    bitrateChart = new QChart();
-    bitrateChart->setTitle("Битрейт (кбит/с)");
-    bitrateChart->legend()->hide();
-    bitrateChart->setBackgroundRoundness(0);
-
-    bitrateSeries = new QLineSeries();
-    bitrateChart->addSeries(bitrateSeries);
-
-    axisX = new QValueAxis();
-    axisX->setRange(0, 60);
-    axisX->setLabelFormat("%d");
-    axisX->setTitleText("Секунды");
-    bitrateChart->addAxis(axisX, Qt::AlignBottom);
-    bitrateSeries->attachAxis(axisX);
-
-    axisY = new QValueAxis();
-    axisY->setRange(0, 2000); // 0-2000 кбит/с
-    axisY->setTitleText("кбит/с");
-    bitrateChart->addAxis(axisY, Qt::AlignLeft);
-    bitrateSeries->attachAxis(axisY);
-
-    chartView = new QChartView(bitrateChart);
-    chartView->setRenderHint(QPainter::Antialiasing);
-    chartView->setMinimumSize(400, 200);
-
-    ui->verticalLayout->insertWidget(0, chartView);
-
-    bitrateTimer.start();
-    QTimer *bitrateUpdateTimer = new QTimer(this);
-    connect(bitrateUpdateTimer, &QTimer::timeout, this, &ChatWindow::updateBitrateChart);
-    bitrateUpdateTimer->start(1000); // Обновление каждую секунду
 
     // Инициализация
     instanceId = QUuid::createUuid().toString();
@@ -71,317 +49,256 @@ ChatWindow::ChatWindow(QWidget *parent)
     // Настройка аудио/видео
     setupAudioVideo();
 
-    // Настройка кнопки статуса
+    // Кнопка статуса
     setupStatusButton();
 
-    // Таймер воспроизведения видео
-    videoPlaybackTimer = new QTimer(this);
-    connect(videoPlaybackTimer, &QTimer::timeout, this, &ChatWindow::processVideoBuffer);
-
-    videoPlaybackTimer->setTimerType(Qt::PreciseTimer);
-    videoPlaybackTimer->start(40); // 25 FPS
-    videoPlaybackTimer->setInterval(40);
-
-
-    ui->remoteVideoLabel->setAttribute(Qt::WA_OpaquePaintEvent);
-    ui->remoteVideoLabel->setAttribute(Qt::WA_NoSystemBackground);
-
-
     logMessage("Система готова. Ваш ник: " + localNickname);
+    logConnectionQuality();
     QTimer::singleShot(1000, this, &ChatWindow::sendDiscover);
 
-    ui->bufferSizeSpinBox->setRange(1, 20); // Минимум 1, максимум 20 кадров
-    ui->bufferSizeSpinBox->setValue(5);     // Значение по умолчанию
     connect(ui->bufferSizeSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &ChatWindow::setVideoBufferSize);
+            [this](int value) {
+                maxVideoBufferSize = value;
+                logMessage(QString("Установлен размер видео буфера: %1 кадров").arg(value));
+            });
+    ui->bufferSizeSpinBox->setRange(5, 30);
+    ui->bufferSizeSpinBox->setValue(maxVideoBufferSize);
+    videoSendTimer = new QTimer(this);
+    connect(videoSendTimer, &QTimer::timeout, this, &ChatWindow::sendBufferedVideo);
+    videoSendTimer->setInterval(500);
 
-    connectionStatusLabel = new QLabel(this);
-    connectionStatusLabel->setAlignment(Qt::AlignCenter);
-    ui->verticalLayout->addWidget(connectionStatusLabel);
-
-    QTimer *bufferAdjustTimer = new QTimer(this);
-    connect(bufferAdjustTimer, &QTimer::timeout, this, &ChatWindow::adjustVideoBuffer);
-    bufferAdjustTimer->start(5000); // Проверка каждые 5 секунд
-
-    QTimer *statsTimer = new QTimer(this);
-    connect(statsTimer, &QTimer::timeout, this, &ChatWindow::logNetworkStats);
-    statsTimer->start(5000); // Логировать каждые 5 секунд
-    frameTimer.start();
-
-    videoBufferTargetSize = 15;  // Фиксированный размер
-    maxBufferSize = 35;         // Максимальный предел
-    isBuffering = true;
-
-    QThread::currentThread()->setPriority(QThread::HighPriority);
-
-    disconnectDetectionTimer->setInterval(2000);
-    connect(disconnectDetectionTimer, &QTimer::timeout, this, [this](){
-        if(isRemotePeerFound && lastPacketTime.elapsed() > 5000) {
-            handleNetworkLoss();
-        }
-    });
-    disconnectDetectionTimer->start();
-
-    lastPacketTime.start(); // Запуск таймера
-
-    connect(videoSink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
-        QImage image = frame.toImage();
-        if (!image.isNull()) {
-            QPixmap pixmap = QPixmap::fromImage(image.scaled(
-                ui->localVideoLabel->size(),
-                Qt::KeepAspectRatio,
-                Qt::SmoothTransformation
-                ));
-            ui->localVideoLabel->setPixmap(pixmap);
-        }
-    });
-
+    connectionCheckTimer = new QTimer(this);
+    connect(connectionCheckTimer, &QTimer::timeout, this, &ChatWindow::checkConnectionActivity);
+    connectionCheckTimer->start(1000);
 }
 
 ChatWindow::~ChatWindow()
 {
+    if (videoSendTimer) {
+        videoSendTimer->stop();
+        delete videoSendTimer;
+    }
+
+    if (connectionCheckTimer) {
+        connectionCheckTimer->stop();
+        delete connectionCheckTimer;
+    }
+
     cleanupAudio();
+
     if (camera) {
         camera->stop();
         delete camera;
     }
-    delete chartView;
-    delete bitrateChart;
-    if(disconnectDetectionTimer) {
-        disconnectDetectionTimer->stop();
-        delete disconnectDetectionTimer;
-    }
+
+    if (captureSession) delete captureSession;
+    if (videoSink) delete videoSink;
+
     delete ui;
 }
 
-void ChatWindow::handleNetworkLoss() {
-    QMutexLocker locker(&videoMutex);
+void ChatWindow::checkConnectionActivity()
+{
+    if (!isRemotePeerFound) return;
 
-    // Проверяем, действительно ли нет пакетов
-    if(lastPacketTime.elapsed() <= 7000) { // Добавляем гистерезис
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+    qint64 timeSinceLastPacket = currentTime - lastPacketTime;
+
+    if (timeSinceLastPacket > 3000) { // 3 секунды без пакетов
+        if (isRemotePeerFound) {
+            logMessage("Обрыв соединения обнаружен по таймауту");
+            resetConnection();
+        }
+    }
+    else if (timeSinceLastPacket > 1000) { // 1 секунда без пакетов
+        if (totalPackets > 0) {
+            lostPackets++;
+            updatePacketLossStats();
+        }
+    }
+
+    if (isConnectionBad && timeSinceLastPacket < 1000 && packetLossRate < 10.0) {
+        isConnectionBad = false;
+        logMessage("Соединение восстановлено после проблем");
+
+        // Запускаем отправку буферизированных кадров
+        if (!videoBuffer.isEmpty()) {
+            QTimer::singleShot(0, this, [this]() {
+                QMutexLocker locker(&videoBufferMutex);
+                logMessage(QString("Начинаем отправку %1 кадров из буфера")
+                               .arg(videoBuffer.size()));
+
+                while (!videoBuffer.isEmpty()) {
+                    sendVideoFrameNow(videoBuffer.dequeue());
+                    QThread::msleep(30); // Пауза для избежания перегрузки
+                }
+            });
+        }
+    }
+}
+
+
+
+void ChatWindow::addToVideoBuffer(const QByteArray &frameData)
+{
+    if (frameData.isEmpty()) return;
+
+    QMutexLocker locker(&videoBufferMutex);
+    while (videoBuffer.size() >= maxVideoBufferSize) {
+        videoBuffer.dequeue();
+    }
+    videoBuffer.enqueue(frameData);
+}
+
+void ChatWindow::sendBufferedVideo()
+{
+    if (!isRemotePeerFound || remoteAddress.isNull()) {
+        videoSendTimer->stop();
         return;
     }
 
-    isRemotePeerFound = false;
-    logMessage("Обнаружена потеря сети");
+    QMutexLocker locker(&videoBufferMutex);
+    if (videoBuffer.isEmpty()) return;
 
-    // Не очищаем буфер полностью, только уменьшаем размер
-    if(videoBuffer.size() > 5) {
-        QMap<qint64, VideoFrame> preserved;
-        auto it = videoBuffer.end();
-        for(int i = 0; i < 5 && it != videoBuffer.begin(); ++i) {
-            --it;
-            preserved.insert(it.key(), it.value());
+    // Отправляем не более 2 кадров за раз
+    int framesToSend = qMin(2, videoBuffer.size());
+    for (int i = 0; i < framesToSend; i++) {
+        QByteArray frameData = videoBuffer.dequeue();
+        QByteArray packet;
+        QDataStream stream(&packet, QIODevice::WriteOnly);
+        stream << QString("VIDEO") << instanceId << localNickname << frameData;
+
+        if (udpSocket->writeDatagram(packet, remoteAddress, remotePort) == -1) {
+            // При ошибке возвращаем кадр в буфер
+            videoBuffer.enqueue(frameData);
+            logMessage("Ошибка отправки видео из буфера");
+            break;
         }
-        videoBuffer = preserved;
+    }
+
+    // Если буфер почти пуст, замедляем отправку
+    if (videoBuffer.size() <= 3) {
+        videoSendTimer->setInterval(800);
     }
 }
 
-void ChatWindow::preserveKeyFrames()
+void ChatWindow::sendVideoFrameNow(const QByteArray &frameData)
 {
-    QMap<qint64, VideoFrame> preserved;
-    for(auto it = videoBuffer.begin(); it != videoBuffer.end(); ++it) {
-        if(it.value().isKeyFrame) {
-            preserved.insert(it.key(), it.value());
+    if (!udpSocket || remoteAddress.isNull() || frameData.isEmpty()) return;
+
+    try {
+        QByteArray packet;
+        QDataStream stream(&packet, QIODevice::WriteOnly);
+        stream << QString("VIDEO") << instanceId << localNickname << frameData;
+
+        if (udpSocket->writeDatagram(packet, remoteAddress, remotePort) == -1) {
+            if (!isConnectionBad) {
+                isConnectionBad = true;
+                logMessage("Ошибка отправки видео - активация буфера");
+            }
+            addToVideoBuffer(frameData);
         }
+    } catch (...) {
+        logMessage("Ошибка при отправке видео кадра");
     }
-    videoBuffer = preserved;
 }
 
-void ChatWindow::updateBitrateChart()
+void ChatWindow::logConnectionQuality()
 {
-    qint64 elapsed = bitrateTimer.restart();
-    if (elapsed == 0) return;
+    QString quality;
+    qint64 timeSinceLastPacket = QDateTime::currentMSecsSinceEpoch() - lastPacketTime;
 
-    // Получаем текущие значения
-    qint64 currentSent = totalBytesSent;
-    qint64 currentReceived = totalBytesReceived;
-
-    // Рассчитываем битрейт (кбит/с)
-    qreal sentKbps = (currentSent - lastUpdateBytesSent) * 8 / (qreal)elapsed / 1000.0;
-    qreal receivedKbps = (currentReceived - lastUpdateBytesReceived) * 8 / (qreal)elapsed / 1000.0;
-    qreal totalKbps = sentKbps + receivedKbps;
-
-    lastUpdateBytesSent = currentSent;
-    lastUpdateBytesReceived = currentReceived;
-
-    // Сохраняем историю (60 секунд)
-    bitrateHistory.append(totalKbps);
-    if (bitrateHistory.size() > 60) {
-        bitrateHistory.removeFirst();
+    // Определяем качество соединения
+    if (!isRemotePeerFound || timeSinceLastPacket > 3000) {
+        quality = "Нет соединения";
+        isConnectionBad = true;
+        packetLossRate = 100.0;
     }
-
-    // Обновляем график
-    bitrateSeries->clear();
-    for (int i = 0; i < bitrateHistory.size(); ++i) {
-        bitrateSeries->append(i, bitrateHistory.at(i));
+    else if (timeSinceLastPacket > 1000) {
+        quality = "Качество связи: Нестабильное (пакеты не поступают)";
+        isConnectionBad = true;
     }
-
-    // Автомасштабирование оси Y
-    qreal max = *std::max_element(bitrateHistory.begin(), bitrateHistory.end());
-    axisY->setRange(0, qMax(100.0, max * 1.1));
-
-    // Обновляем статус в заголовке
-    bitrateChart->setTitle(QString("Битрейт (кбит/с) | TX: %1 RX: %2")
-                               .arg(sentKbps, 0, 'f', 1)
-                               .arg(receivedKbps, 0, 'f', 1));
-
-    int bufferFillPercent = videoBufferTargetSize > 0 ?
-                                (videoBuffer.size() * 100) / videoBufferTargetSize : 0;
-
-    bitrateChart->setTitle(QString("Битрейт | TX: %1 кбит/с RX: %2 кбит/с | Буфер: %3%")
-                               .arg(sentKbps, 0, 'f', 1)
-                               .arg(receivedKbps, 0, 'f', 1)
-                               .arg(bufferFillPercent));
-}
-
-void ChatWindow::recoveryQualityManagement()
-{
-    // Постепенное повышение качества
-    QTimer::singleShot(30000, this, [this](){ // Через 30 сек
-        if(isRemotePeerFound) {
-            videoBufferTargetSize = 30; // Возвращаем нормальный размер
-            maxBufferSize = 45;
-        }
-    });
-}
-
-void ChatWindow::setVideoBufferSize(int size) {
-    QMutexLocker locker(&videoMutex);
-
-    // Устанавливаем новые размеры
-    videoBufferTargetSize = size;
-    maxBufferSize = size + 25; // Максимальный размер на 25 больше целевого
-
-    logMessage(QString("Ручная настройка: %1/%2 (цель/макс)")
-                    .arg(videoBufferTargetSize).arg(maxBufferSize));
-
-    // Очищаем избыточные кадры
-    while (videoBuffer.size() > maxBufferSize) {
-        if (!displayQueue.isEmpty()) {
-            qint64 oldest = displayQueue.first();
-            videoBuffer.remove(oldest);
-            displayQueue.removeFirst();
-        } else {
-            videoBuffer.remove(videoBuffer.firstKey());
-        }
+    else if (packetLossRate < 2.0) {
+        quality = "Качество связи: Отличное";
+        isConnectionBad = false;
     }
-
-    // Обновляем статус буферизации
-    if (videoBuffer.size() < videoBufferTargetSize) {
-        isBuffering = true;
-        bufferFillTimer.restart();
+    else if (packetLossRate < 5.0) {
+        quality = "Качество связи: Хорошее";
+        isConnectionBad = false;
     }
-
-    updateVideoStatus();
-}
-
-void ChatWindow::processVideoBuffer() {
-    QMutexLocker locker(&videoMutex);
-
-    static QElapsedTimer frameTimer;
-    if (!frameTimer.isValid()) frameTimer.start();
-    if (frameTimer.elapsed() < 33) return; // 30 FPS (33ms)
-    frameTimer.restart();
-
-    // Если буфер пуст - показываем последний успешный кадр
-    if (videoBuffer.isEmpty()) {
-        static QPixmap lastGoodFrame;
-        if (!lastGoodFrame.isNull()) {
-            ui->remoteVideoLabel->setPixmap(lastGoodFrame);
-        } else {
-            QPixmap blank(ui->remoteVideoLabel->size());
-            blank.fill(Qt::black);
-            ui->remoteVideoLabel->setPixmap(blank);
-        }
-        return;
-    }
-
-    // Берем самый свежий доступный кадр
-    qint64 frameToShow = videoBuffer.lastKey();
-    const VideoFrame& frame = videoBuffer[frameToShow];
-
-    QImage image;
-    if (image.loadFromData(frame.data, "JPEG")) {
-        QPixmap pixmap = QPixmap::fromImage(image.scaled(
-            ui->remoteVideoLabel->size(),
-            Qt::KeepAspectRatio,
-            Qt::SmoothTransformation
-            ));
-
-        ui->remoteVideoLabel->setPixmap(pixmap);
-        lastGoodFrame = pixmap; // Сохраняем последний успешный кадр
-        framesDisplayed++;
-
-        // Удаляем только если буфер переполнен
-        if (videoBuffer.size() > maxBufferSize) {
-            videoBuffer.remove(videoBuffer.firstKey());
-        }
-    } else {
-        framesDropped++;
-    }
-}
-
-void ChatWindow::resetConnectionState()
-{
-    QMutexLocker locker(&videoMutex);
-    videoFrameQueue.clear();
-    videoBuffer.clear();
-    currentFrameId = 0;
-    lastDisplayedFrameId = -1;
-    framesDropped = 0;
-    framesDisplayed = 0;
-    isBuffering = true;
-    bufferFillTimer.start(); // Перезапускаем таймер
-    logMessage("Видео буфер сброшен");
-}
-
-void ChatWindow::updateVideoStatus()
-{
-    QString status;
-    QColor color;
-
-    if (!isRemotePeerFound) {
-        status = "Нет соединения";
-        color = Qt::red;
-    }
-    else if (isBuffering) {
-        status = "Восстановление...";
-        color = Qt::yellow;
+    else if (packetLossRate < 10.0) {
+        quality = "Качество связи: Среднее";
+        isConnectionBad = true;
     }
     else {
-        status = "Соединение стабильно";
-        color = Qt::green;
+        quality = "Качество связи: Плохое";
+        isConnectionBad = true;
     }
 
-    connectionStatusLabel->setText(status);
-    connectionStatusLabel->setStyleSheet(QString("color: %1").arg(color.name()));
+    // Получаем информацию о буфере
+    int bufferSize;
+    int bufferPercent;
+    {
+        QMutexLocker locker(&videoBufferMutex);
+        bufferSize = videoBuffer.size();
+        bufferPercent = (bufferSize * 100) / qMax(1, maxVideoBufferSize); // Защита от деления на 0
+    }
+
+    // Формируем строку статуса буфера
+    QString bufferStatus = QString(" | Буфер: %1/%2 (%3%)")
+                               .arg(bufferSize)
+                               .arg(maxVideoBufferSize)
+                               .arg(bufferPercent);
+
+    // Формируем полное сообщение для лога
+    QString fullMessage = quality +
+                          QString(" (Потери: %1%, Пакетов: %2, Размер пакета: %3мс)")
+                              .arg(packetLossRate, 0, 'f', 1)
+                              .arg(totalPackets)
+                              .arg(currentPacketMs) +
+                          bufferStatus;
+
+    logMessage(fullMessage);
 }
 
-void ChatWindow::checkBufferState()
+void ChatWindow::checkAudioTiming()
 {
-    if (videoBuffer.isEmpty()) {
+    if (!audioTimer.isValid()) {
+        audioTimer.start();
         return;
     }
 
-    if (isBuffering && videoBuffer.size() >= videoBufferTargetSize) {
-        isBuffering = false;
-        qint64 fillTime = bufferFillTimer.elapsed();
-        logMessage(QString("Буфер заполнен до %1 кадров за %2 мс")
-                       .arg(videoBuffer.size()).arg(fillTime));
-        updateVideoStatus();
-    }
-    else if (!isBuffering && videoBuffer.size() < videoBufferTargetSize/2) {
-        isBuffering = true;
-        logMessage("Предупреждение: буфер опустошается!");
-        updateVideoStatus();
+    if (audioTimer.elapsed() > 2000) {
+        QMutexLocker locker(&audioMutex);
+        int currentSize = audioQueue.size();
+
+        if (currentSize < TARGET_QUEUE_SIZE && currentPacketMs > MIN_PACKET_MS) {
+            currentPacketMs = qMax(MIN_PACKET_MS, currentPacketMs - 5);
+        }
+        else if (currentSize > TARGET_QUEUE_SIZE * 1.5 && currentPacketMs < MAX_PACKET_MS) {
+            currentPacketMs = qMin(MAX_PACKET_MS, currentPacketMs + 5);
+        }
+
+        audioTimer.restart();
+        logConnectionQuality();
     }
 }
 
+void ChatWindow::updatePacketLossStats()
+{
+    if (totalPackets > 10) { // Не обновляем статистику для первых 10 пакетов
+        packetLossRate = (double)lostPackets / totalPackets * 100.0;
+
+        // Ограничиваем диапазон
+        packetLossRate = qBound(0.0, packetLossRate, 100.0);
+
+        logConnectionQuality();
+    }
+}
 
 int ChatWindow::calculateAudioPacketSize() const
 {
-    return (audioFormat.sampleRate() * audioFormat.bytesPerFrame() * AUDIO_PACKET_MS) / 1000;
+    return (audioFormat.sampleRate() * audioFormat.bytesPerFrame() * currentPacketMs) / 1000;
 }
 
 void ChatWindow::setupTimers()
@@ -399,6 +316,11 @@ void ChatWindow::setupTimers()
     connect(keepAliveTimer, &QTimer::timeout, this, &ChatWindow::sendKeepAlive);
     keepAliveTimer->start(2000);
 
+    // Таймер для проверки аудио буфера
+    QTimer *audioCheckTimer = new QTimer(this);
+    connect(audioCheckTimer, &QTimer::timeout, this, &ChatWindow::checkAudioTiming);
+    audioCheckTimer->start(500);
+
     connect(udpSocket, &QUdpSocket::readyRead, this, &ChatWindow::readPendingDatagrams);
 }
 
@@ -412,13 +334,16 @@ void ChatWindow::initAudioDevices()
 {
     cleanupAudio();
 
+    // Универсальный формат аудио
     audioFormat.setSampleRate(48000);
     audioFormat.setChannelCount(1);
     audioFormat.setSampleFormat(QAudioFormat::Int16);
 
+    // Получаем устройства
     QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
     QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
 
+    // Проверяем и корректируем формат
     if (!inputDevice.isFormatSupported(audioFormat)) {
         audioFormat = inputDevice.preferredFormat();
         logMessage("Используется входной формат: " +
@@ -426,6 +351,7 @@ void ChatWindow::initAudioDevices()
                    QString::number(audioFormat.channelCount()) + " каналов");
     }
 
+    // Приводим выходной формат к входному
     if (!outputDevice.isFormatSupported(audioFormat)) {
         QAudioFormat preferredOutFormat = outputDevice.preferredFormat();
         preferredOutFormat.setSampleRate(audioFormat.sampleRate());
@@ -441,31 +367,40 @@ void ChatWindow::initAudioDevices()
 
     audioBufferSize = calculateAudioPacketSize();
 
+    // Инициализация входа
     audioInput = new QAudioSource(inputDevice, audioFormat, this);
-    audioInput->setBufferSize(audioBufferSize * 2);
+    audioInput->setBufferSize(audioBufferSize * 3);
     audioInputDevice = audioInput->start();
     connect(audioInputDevice, &QIODevice::readyRead, this, &ChatWindow::sendAudioData);
 
+    // Инициализация выхода
     audioOutput = new QAudioSink(outputDevice, audioFormat, this);
-    audioOutput->setBufferSize(audioBufferSize * 4);
+    audioOutput->setBufferSize(audioBufferSize * 6);
     audioOutputDevice = audioOutput->start();
 }
 
 void ChatWindow::initVideoDevices()
 {
-    const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
-    if (!cameras.isEmpty()) {
+    try {
+        const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
+        if (cameras.isEmpty()) {
+            logMessage("Камера не обнаружена");
+            return;
+        }
+
         camera = new QCamera(cameras.first(), this);
         captureSession = new QMediaCaptureSession(this);
         captureSession->setCamera(camera);
 
         videoSink = new QVideoSink(this);
         captureSession->setVideoOutput(videoSink);
-        connect(videoSink, &QVideoSink::videoFrameChanged, this, &ChatWindow::videoFrameReady);
+
+        connect(videoSink, &QVideoSink::videoFrameChanged,
+                this, &ChatWindow::videoFrameReady, Qt::DirectConnection);
 
         camera->start();
-    } else {
-        logMessage("Камера не обнаружена");
+    } catch (...) {
+        logMessage("Ошибка инициализации камеры");
     }
 }
 
@@ -494,24 +429,27 @@ void ChatWindow::cleanupAudio()
 
 void ChatWindow::sendAudioData()
 {
-    if (!isRemotePeerFound || !audioInputDevice) return;
+    if (!isRemotePeerFound || !audioInputDevice || !udpSocket) return;
 
-    const int packetSize = calculateAudioPacketSize();
+    try {
+        const int packetSize = calculateAudioPacketSize();
+        while (audioInputDevice->bytesAvailable() >= packetSize) {
+            QByteArray audioData = audioInputDevice->read(packetSize);
+            if (audioData.isEmpty() || audioData.size() != packetSize) {
+                continue;
+            }
 
-    while (audioInputDevice->bytesAvailable() >= packetSize) {
-        QByteArray audioData = audioInputDevice->read(packetSize);
-        if (audioData.isEmpty() || audioData.size() != packetSize) {
-            continue;
+            QByteArray packet;
+            QDataStream stream(&packet, QIODevice::WriteOnly);
+            stream << QString("AUDIO") << instanceId << localNickname << ++lastSequence << audioData;
+
+            if (udpSocket->writeDatagram(packet, remoteAddress, remotePort) == -1) {
+                logMessage("Ошибка отправки аудио");
+                break;
+            }
         }
-
-        QByteArray packet;
-        QDataStream stream(&packet, QIODevice::WriteOnly);
-        stream << QString("AUDIO") << instanceId << localNickname << audioData;
-
-        qint64 bytesSent = udpSocket->writeDatagram(packet, remoteAddress, remotePort);
-        if (bytesSent != -1) {
-            totalBytesSent += bytesSent; // Добавляем подсчет отправленных байт
-        }
+    } catch (...) {
+        logMessage("Ошибка при отправке аудио данных");
     }
 }
 
@@ -519,85 +457,94 @@ void ChatWindow::readPendingDatagrams()
 {
     while (udpSocket->hasPendingDatagrams()) {
         QNetworkDatagram datagram = udpSocket->receiveDatagram();
-        totalBytesReceived += datagram.data().size();
-        lastPacketTime.restart(); // Обновляем время последнего пакета
-
         if (!datagram.isValid() || isLocalAddress(datagram.senderAddress())) {
             continue;
         }
 
         QByteArray data = datagram.data();
         QDataStream stream(data);
-        QString messageType;
-        stream >> messageType;
+        QString msgType;
+        stream >> msgType;
 
-        // Диагностика видео-пакетов
-        if (messageType == "VIDEO") {
-            if (videoBuffer.isEmpty()) {
-                logMessage("Получен видео-пакет. Размер: " +
-                           QString::number(datagram.data().size()) + " байт");
-            }
-        }
-
-        // Обработка остальных типов сообщений
-        if (messageType == "AUDIO") {
+        if (msgType == "AUDIO") {
             processAudioPacket(stream);
         }
-        else if (messageType == "DISCOVER") {
+        else if (msgType == "DISCOVER") {
             processDiscoverPacket(stream, datagram.senderAddress());
         }
-        else if (messageType == "DISCOVER_REPLY") {
+        else if (msgType == "DISCOVER_REPLY") {
             processDiscoverReply(stream, datagram.senderAddress());
         }
-        else if (messageType == "KEEPALIVE") {
+        else if (msgType == "KEEPALIVE") {
             processKeepAlive(stream, datagram.senderAddress());
         }
-        else if (messageType == "VIDEO") {
+        else if (msgType == "VIDEO") {
             processVideoPacket(stream);
         }
-        else if (messageType == "MSG") {
+        else if (msgType == "MSG") {
             processTextMessage(stream);
         }
     }
 }
 
+void ChatWindow::resetConnectionStats()
+{
+    QMutexLocker locker(&audioMutex);  // Защищаем доступ к общим данным
+
+    totalPackets = 0;
+    lostPackets = 0;
+    lastSequence = -1;
+    packetLossRate = 0.0;
+    lastPacketTime = 0;
+
+    // Можно добавить лог для отладки
+    logMessage("Статистика соединения сброшена");
+}
+
 void ChatWindow::processAudioPacket(QDataStream &stream)
 {
     QString id, name;
+    qint64 sequence;
     QByteArray audioData;
-    stream >> id >> name >> audioData;
+    stream >> id >> name >> sequence >> audioData;
+
+    // Сбрасываем счетчик пропущенных пакетов
+    missedPings = 0;
+
+    // Обновляем время последнего полученного пакета
+    lastPacketTime = QDateTime::currentMSecsSinceEpoch();
+
+    // Если это первый пакет после разрыва, сбрасываем статистику
+    if (!isRemotePeerFound) {
+        resetConnectionStats();
+        isRemotePeerFound = true;
+    }
+
+    totalPackets++;
+    qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+    lastPacketTime = currentTime;
+
+    // Проверка пропущенных пакетов
+    if (lastSequence != -1 && sequence > lastSequence + 1) {
+        lostPackets += sequence - lastSequence - 1;
+        updatePacketLossStats();
+    }
+    lastSequence = sequence;
 
     if (id == instanceId || !audioOutputDevice) return;
 
-    int expectedSize = calculateAudioPacketSize();
-    if (abs(audioData.size() - expectedSize) > (expectedSize * 0.1)) {
-        logMessage("Некорректный размер аудио пакета. Получено: " +
-                   QString::number(audioData.size()) + ", ожидалось: " +
-                   QString::number(expectedSize));
-        return;
+    QMutexLocker locker(&audioMutex);
+    audioQueue.enqueue(audioData);
+
+    // Поддерживаем оптимальный размер очереди
+    while (audioQueue.size() > TARGET_QUEUE_SIZE * 2) {
+        audioQueue.dequeue();
     }
 
-    QMutexLocker locker(&audioMutex);
-    audioOutputDevice->write(audioData.constData(), qMin(audioData.size(), expectedSize));
-}
-
-void ChatWindow::logNetworkStats() {
-    double dropRate = framesDisplayed > 0 ?
-                          (double)framesDropped / (framesDisplayed + framesDropped) * 100 : 0;
-
-    logMessage(QString("Статистика:\n"
-                       "Кадры: %1/сек | Потери: %2%\n"
-                       "Буфер: %3/%4 | Последний пакет: %5 мс назад\n"
-                       "Состояние: %6")
-                   .arg(framesDisplayed / 5.0, 0, 'f', 1)
-                   .arg(dropRate, 0, 'f', 1)
-                   .arg(videoBuffer.size())
-                   .arg(videoBufferTargetSize)
-                   .arg(lastPacketTime.elapsed())
-                   .arg(isRemotePeerFound ? "Подключено" : "Отключено"));
-
-    framesDisplayed = 0;
-    framesDropped = 0;
+    // Воспроизводим, если накопилось достаточно данных
+    if (audioQueue.size() >= TARGET_QUEUE_SIZE) {
+        audioOutputDevice->write(audioQueue.dequeue());
+    }
 }
 
 void ChatWindow::processDiscoverPacket(QDataStream &stream, const QHostAddress &senderAddr)
@@ -617,6 +564,7 @@ void ChatWindow::processDiscoverPacket(QDataStream &stream, const QHostAddress &
     isRemotePeerFound = true;
     missedPings = 0;
     logMessage("Обнаружен участник: " + name + " (" + senderAddr.toString() + ")");
+    logConnectionQuality();
 }
 
 void ChatWindow::processDiscoverReply(QDataStream &stream, const QHostAddress &senderAddr)
@@ -624,84 +572,62 @@ void ChatWindow::processDiscoverReply(QDataStream &stream, const QHostAddress &s
     QString id, name;
     stream >> id >> name;
 
-    if (id == instanceId || isRemotePeerFound) return; // Добавляем проверку isRemotePeerFound
+    if (id == instanceId) return;
 
-    if(isRemotePeerFound && remoteNickname == name) {
-        lastPacketTime.restart();
-        return;
-    }
+    // Сбрасываем статистику при новом подключении
+    resetConnectionStats();
 
-    resetConnectionState();
     remoteAddress = senderAddr;
     remoteNickname = name;
     isRemotePeerFound = true;
     missedPings = 0;
+    lastPacketTime = QDateTime::currentMSecsSinceEpoch();
+
     logMessage("Подключено к участнику: " + name + " (" + senderAddr.toString() + ")");
+    logConnectionQuality();
 }
 
 void ChatWindow::processKeepAlive(QDataStream &stream, const QHostAddress &senderAddr)
 {
     QString id, name;
-    stream >> id >> name;
+    qint64 timestamp;
+    stream >> id >> name >> timestamp;
 
-    if (id == instanceId) return;
+    lastPacketTime = QDateTime::currentMSecsSinceEpoch();
 
-    if (!isRemotePeerFound) {
-        resetConnectionState(); // Сбрасываем состояние при восстановлении
+
+    // Рассчитываем сетевую задержку
+    qint64 delay = QDateTime::currentMSecsSinceEpoch() - timestamp;
+
+    // Адаптируем размер пакета на основе задержки
+    if (delay > 100 && currentPacketMs < MAX_PACKET_MS) {
+        currentPacketMs = qMin(MAX_PACKET_MS, currentPacketMs + 5);
+    }
+    else if (delay < 50 && currentPacketMs > MIN_PACKET_MS) {
+        currentPacketMs = qMax(MIN_PACKET_MS, currentPacketMs - 5);
     }
 
     missedPings = 0;
-    remoteAddress = senderAddr;
-    remoteNickname = name;
-    isRemotePeerFound = true;
+    if (!isRemotePeerFound || remoteAddress != senderAddr) {
+        remoteAddress = senderAddr;
+        remoteNickname = name;
+        isRemotePeerFound = true;
+    }
 }
 
-void ChatWindow::processVideoPacket(QDataStream &stream) {
+void ChatWindow::processVideoPacket(QDataStream &stream)
+{
     QString id, name;
     QByteArray imageData;
-    qint64 sequence;
-    bool isKeyFrame;
-    stream >> id >> name >> sequence >> isKeyFrame >> imageData;
+    stream >> id >> name >> imageData;
 
     if (id == instanceId) return;
 
-    lastPacketTime.restart();
-
-    QMutexLocker locker(&videoMutex);
-
-    // Быстрая проверка целостности
-    if (imageData.size() < 100 || !imageData.startsWith("\xFF\xD8")) {
-        return;
-    }
-
-    // Ключевые кадры обрабатываем особо
-    if (isKeyFrame) {
-        videoBuffer.clear(); // Полная очистка только для ключевых кадров
-        isBuffering = true;
-        bufferFillTimer.start();
-    }
-
-    // Добавляем только новые кадры
-    if (!videoBuffer.contains(sequence)) {
-        VideoFrame newFrame(imageData, QDateTime::currentMSecsSinceEpoch(), isKeyFrame);
-        videoBuffer.insert(sequence, newFrame);
-        displayQueue.append(sequence);
-
-        // Автоматическая регулировка буфера
-        while (videoBuffer.size() > maxBufferSize) {
-            if (!displayQueue.isEmpty() && videoBuffer.contains(displayQueue.first())) {
-                videoBuffer.remove(displayQueue.first());
-                displayQueue.removeFirst();
-            } else {
-                videoBuffer.remove(videoBuffer.firstKey());
-            }
-        }
-    }
-
-    // Обновление статуса буферизации
-    if (isBuffering && videoBuffer.size() >= videoBufferTargetSize) {
-        isBuffering = false;
-        logMessage("Буфер заполнен. Начало воспроизведения.");
+    QImage image;
+    if (image.loadFromData(imageData, "JPEG")) {
+        QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->remoteVideoLabel->size(),
+                                                         Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        ui->remoteVideoLabel->setPixmap(pixmap);
     }
 }
 
@@ -712,16 +638,6 @@ void ChatWindow::processTextMessage(QDataStream &stream)
 
     if (id != instanceId) {
         ui->chatArea->append("<b>" + name + ":</b> " + text);
-    }
-}
-
-void ChatWindow::emergencySave()
-{
-    if(!videoBuffer.isEmpty()) {
-        QFile frameCache("last_frame.dat");
-        if(frameCache.open(QIODevice::WriteOnly)) {
-            frameCache.write(videoBuffer.last().data);
-        }
     }
 }
 
@@ -749,7 +665,7 @@ void ChatWindow::sendKeepAlive()
     if (isRemotePeerFound && !remoteAddress.isNull()) {
         QByteArray data;
         QDataStream stream(&data, QIODevice::WriteOnly);
-        stream << QString("KEEPALIVE") << instanceId << localNickname;
+        stream << QString("KEEPALIVE") << instanceId << localNickname << QDateTime::currentMSecsSinceEpoch();
         udpSocket->writeDatagram(data, remoteAddress, remotePort);
     } else {
         sendDiscover();
@@ -778,46 +694,57 @@ void ChatWindow::on_sendButton_clicked()
     }
 }
 
-void ChatWindow::showStatus() {
+void ChatWindow::showStatus()
+{
     QString status = QString("Статус системы:\n"
                              "Соединение: %1\n"
-                             "Участник: %2\n"
-                             "IP: %3\n"
-                             "Формат аудио: %4 Hz, %5 каналов\n"
-                             "Видео буфер: %6/%7 (макс %8)\n"
-                             "Ручной размер: %9 кадров\n")
+                             "Качество связи: %2\n"
+                             "Размер пакета: %3 мс\n"
+                             "Потери пакетов: %4%\n"
+                             "Участник: %5\n"
+                             "IP: %6\n"
+                             "Формат аудио: %7 Hz, %8 каналов\n")
                          .arg(isRemotePeerFound ? "Подключено" : "Не подключено")
+                         .arg(packetLossRate < 2 ? "Отличное" :
+                                  packetLossRate < 5 ? "Хорошее" : "Плохое")
+                         .arg(currentPacketMs)
+                         .arg(packetLossRate, 0, 'f', 1)
                          .arg(remoteNickname)
                          .arg(remoteAddress.toString())
                          .arg(audioFormat.sampleRate())
-                         .arg(audioFormat.channelCount())
-                         .arg(videoBuffer.size())
-                         .arg(videoBufferTargetSize)
-                         .arg(maxBufferSize)
-                         .arg(ui->bufferSizeSpinBox->value());
+                         .arg(audioFormat.channelCount());
 
     QMessageBox::information(this, "Статус системы", status);
 }
 
 void ChatWindow::resetConnection()
 {
-    resetConnectionState(); // Используем новый метод
+    if (!isRemotePeerFound) return;
 
     isRemotePeerFound = false;
     remoteAddress = QHostAddress();
     remoteNickname.clear();
     missedPings = 0;
+    packetLossRate = 100.0;
 
-    QMetaObject::invokeMethod(this, &ChatWindow::clearRemoteVideo, Qt::QueuedConnection);
+    {
+        QMutexLocker locker(&audioMutex);
+        totalPackets = 0;
+        lostPackets = 0;
+        lastSequence = -1;
+        audioQueue.clear();
+    }
+
+    {
+        QMutexLocker locker(&videoBufferMutex);
+        videoBuffer.clear();
+    }
+
+    videoSendTimer->stop();
+    isConnectionBad = false;
+
     logMessage("Соединение сброшено");
     ui->chatArea->append("<i>Соединение потеряно</i>");
-}
-
-void ChatWindow::clearRemoteVideo()
-{
-    ui->remoteVideoLabel->clear();
-    ui->remoteVideoLabel->setText("Ожидание подключения...");
-    ui->remoteVideoLabel->setStyleSheet("QLabel { color: red; }");
 }
 
 bool ChatWindow::isLocalAddress(const QHostAddress &address)
@@ -834,97 +761,93 @@ bool ChatWindow::isLocalAddress(const QHostAddress &address)
 void ChatWindow::logMessage(const QString &message)
 {
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
-    ui->debugArea->append("[" + timestamp + "] " + message);
+    QString bufferStatus;
+
+    {
+        QMutexLocker locker(&videoBufferMutex);
+        if (videoBuffer.size() > 0) {
+            int bufferPercent = (videoBuffer.size() * 100) / maxVideoBufferSize;
+            bufferStatus = QString(" | Буфер: %1/%2 (%3%)")
+                               .arg(videoBuffer.size())
+                               .arg(maxVideoBufferSize)
+                               .arg(bufferPercent);
+        } else {
+            bufferStatus = " | Буфер пуст";
+        }
+    }
+
+    QString fullMessage = QString("[%1] %2%3")
+                              .arg(timestamp)
+                              .arg(message)
+                              .arg(bufferStatus);
+
+    ui->debugArea->append(fullMessage);
     ui->debugArea->verticalScrollBar()->setValue(ui->debugArea->verticalScrollBar()->maximum());
 }
 
-void ChatWindow::videoFrameReady(const QVideoFrame &frame) {
-    static QElapsedTimer sendTimer;
-    if (!sendTimer.isValid()) sendTimer.start();
-    if (sendTimer.elapsed() < 40) return; // 25 FPS
-    sendTimer.restart();
+void ChatWindow::videoFrameReady(const QVideoFrame &frame)
+{
+    if (!frame.isValid() || !ui || !ui->localVideoLabel) return;
 
-    QImage image = frame.toImage();
-    if (image.isNull()) return;
+    try {
+        // Локальное отображение
+        QImage image = frame.toImage();
+        if (image.isNull()) return;
 
-    // Оптимальные параметры сжатия
-    int quality = isBuffering ? 60 : 75;
-    int resolution = isBuffering ? 480 : 640;
+        QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->localVideoLabel->size(),
+                                                         Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        if (!pixmap.isNull()) {
+            ui->localVideoLabel->setPixmap(pixmap);
+        }
 
-    image = image.scaled(resolution, resolution * 9/16,
-                         Qt::KeepAspectRatio, Qt::FastTransformation);
+        // Подготовка кадра для отправки
+        image = image.scaled(640, 480, Qt::KeepAspectRatio);
+        QByteArray imageData;
+        QBuffer buffer(&imageData);
+        if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "JPEG", 80)) {
+            logMessage("Ошибка кодирования видео");
+            return;
+        }
 
-    QByteArray imageData;
-    QBuffer buffer(&imageData);
-    buffer.open(QIODevice::WriteOnly);
-    image.save(&buffer, "JPEG", quality);
+        // Безопасная проверка состояния соединения
+        bool currentConnectionBad;
+        {
+            QMutexLocker locker(&audioMutex);
+            currentConnectionBad = (packetLossRate > 30.0 && totalPackets > 50) ||
+                                   !isRemotePeerFound ||
+                                   (QDateTime::currentMSecsSinceEpoch() - lastPacketTime > 3000);
+        }
 
-    // Отправка только если подключены
-    if (isRemotePeerFound) {
-        static qint64 seqNum = 0;
-        QByteArray packet;
-        QDataStream stream(&packet, QIODevice::WriteOnly);
-        stream << QString("VIDEO") << instanceId << localNickname
-               << seqNum++ << (seqNum % 30 == 0) << imageData;
+        // Обработка изменения состояния
+        if (currentConnectionBad != isConnectionBad) {
+            isConnectionBad = currentConnectionBad;
 
-        udpSocket->writeDatagram(packet, remoteAddress, remotePort);
-    }
-}
+            if (isConnectionBad) {
+                logMessage(QString("Проблемы с соединением (потери: %1%), активация буфера")
+                               .arg(packetLossRate, 0, 'f', 1));
+                if (videoSendTimer) videoSendTimer->start(500);
+            } else {
+                logMessage("Соединение восстановлено");
+                if (videoSendTimer) videoSendTimer->stop();
 
-void ChatWindow::adjustVideoBuffer() {
-    QMutexLocker locker(&videoMutex);
+                // Асинхронная отправка буферизированных кадров
+                QTimer::singleShot(0, this, [this]() {
+                    QMutexLocker locker(&videoBufferMutex);
+                    while (!videoBuffer.isEmpty()) {
+                        sendVideoFrameNow(videoBuffer.dequeue());
+                        QThread::msleep(30);
+                    }
+                });
+            }
+        }
 
-    // Жесткое ограничение размера буфера
-    while (videoBuffer.size() > maxBufferSize) {
-        if (!displayQueue.isEmpty()) {
-            qint64 oldest = displayQueue.first();
-            videoBuffer.remove(oldest);
-            displayQueue.removeFirst();
+        // Безопасная отправка/буферизация
+        if (!isConnectionBad) {
+            sendVideoFrameNow(imageData);
         } else {
-            videoBuffer.remove(videoBuffer.firstKey());
+            addToVideoBuffer(imageData);
         }
+    } catch (...) {
+        logMessage("Критическая ошибка в videoFrameReady");
     }
 }
-
-void ChatWindow::paintEvent(QPaintEvent *event)
-{
-    QMainWindow::paintEvent(event);
-
-    if (isRemotePeerFound) {
-        if (ui->remoteVideoLabel->pixmap().isNull()) {
-            QPixmap pixmap(ui->remoteVideoLabel->size());
-            pixmap.fill(Qt::black);
-
-            QPainter painter(&pixmap);
-            painter.setPen(Qt::white);
-            painter.drawText(pixmap.rect(), Qt::AlignCenter,
-                             isBuffering ? "Буферизация..." : "Ожидание данных");
-
-            ui->remoteVideoLabel->setPixmap(pixmap);
-        }
-    }
-}
-
-void ChatWindow::bufferVideoPacket(const QByteArray &data, qint64 sequence)
-{
-    QMutexLocker locker(&videoMutex);
-
-    // Проверка целостности JPEG
-    if (data.size() < 100 || !data.startsWith("\xFF\xD8")) {
-        logMessage("Неверный формат JPEG");
-        return;
-    }
-
-    // Добавляем только новые кадры
-    if (!videoBuffer.contains(sequence)) {
-        videoBuffer.insert(sequence, VideoFrame(data, QDateTime::currentMSecsSinceEpoch(), false));
-        displayQueue.append(sequence); // Используем append() вместо enqueue()
-
-        // Ограничение размера буфера
-        while (videoBuffer.size() > maxBufferSize && !displayQueue.isEmpty()) {
-            qint64 oldest = displayQueue.takeFirst(); // Используем takeFirst() вместо dequeue()
-            videoBuffer.remove(oldest);
-        }
-    }
-}
-
