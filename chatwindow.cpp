@@ -29,6 +29,8 @@ ChatWindow::ChatWindow(QWidget *parent)
     ,audioInput(nullptr), audioOutput(nullptr),
     camera(nullptr), captureSession(nullptr),
     videoSink(nullptr)
+    ,videoSendTimer(nullptr),
+    connectionCheckTimer(nullptr)
 {
     ui->setupUi(this);
     setWindowTitle("VladioChat");
@@ -70,10 +72,35 @@ ChatWindow::ChatWindow(QWidget *parent)
     connectionCheckTimer = new QTimer(this);
     connect(connectionCheckTimer, &QTimer::timeout, this, &ChatWindow::checkConnectionActivity);
     connectionCheckTimer->start(1000);
+
+    QComboBox *sampleRateCombo = new QComboBox(this);
+    for (int rate : SUPPORTED_SAMPLE_RATES) {
+        sampleRateCombo->addItem(QString("%1 Гц").arg(rate), rate);
+    }
+    sampleRateCombo->setCurrentIndex(SUPPORTED_SAMPLE_RATES.indexOf(currentSampleRate));
+
+    connect(sampleRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            [this](int index) {
+                int newRate = SUPPORTED_SAMPLE_RATES[index];
+                this->changeAudioFormat(newRate);
+            });
+    connect(ui->audioFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ChatWindow::onAudioFormatChanged);
+    connect(ui->applySettingsButton, &QPushButton::clicked,
+            this, &ChatWindow::applySettings);
 }
 
 ChatWindow::~ChatWindow()
 {
+    if (videoSendTimer) {
+        videoSendTimer->stop();
+        delete videoSendTimer;
+    }
+
+    if (connectionCheckTimer) {
+        connectionCheckTimer->stop();
+        delete connectionCheckTimer;
+    }
     if (videoSendTimer) {
         videoSendTimer->stop();
         delete videoSendTimer;
@@ -97,43 +124,110 @@ ChatWindow::~ChatWindow()
     delete ui;
 }
 
+void ChatWindow::onAudioFormatChanged(int index)
+{
+    if (index >= 0 && index < SUPPORTED_SAMPLE_RATES.size()) {
+        int newRate = SUPPORTED_SAMPLE_RATES[index];
+        changeAudioFormat(newRate);
+    }
+}
+
+void ChatWindow::applySettings()
+{
+    // Применение аудио настроек
+    int audioQualityIndex = ui->audioQualityCombo->currentIndex();
+    int audioRate = SUPPORTED_SAMPLE_RATES[audioQualityIndex];
+    changeAudioFormat(audioRate);
+
+    // Применение размера аудиопакета
+    int packetSizeIndex = ui->audioPacketSizeCombo->currentIndex();
+    currentPacketMs = 20 + packetSizeIndex * 20; // 20, 40 или 60 мс
+    updateAudioPacketSize();
+
+    // Применение видео настроек
+    int videoQuality = ui->videoQualitySlider->value();
+    // Здесь добавьте логику для настройки качества видео
+
+    logMessage("Настройки применены");
+}
+
+void ChatWindow::showAudioFormatWarning(int requestedRate, int actualRate)
+{
+    QMessageBox::warning(this, "Неподдерживаемый формат",
+                         QString("Запрошенный аудиоформат %1 Гц не поддерживается.\n"
+                                 "Будет использован %2 Гц.")
+                             .arg(requestedRate)
+                             .arg(actualRate));
+
+    logMessage(QString("Автоматическая смена формата: %1 → %2 Гц")
+                   .arg(requestedRate)
+                   .arg(actualRate));
+}
+
+bool ChatWindow::initAudioWithSampleRate(int sampleRate)
+{
+    cleanupAudio(); // Очищаем предыдущие устройства
+
+    audioFormat.setSampleRate(sampleRate);
+    audioFormat.setChannelCount(1);
+    audioFormat.setSampleFormat(QAudioFormat::Int16);
+
+    QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
+    QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
+
+    // Проверяем поддержку на входе и выходе
+    if (!inputDevice.isFormatSupported(audioFormat) ||
+        !outputDevice.isFormatSupported(audioFormat)) {
+        return false;
+    }
+
+    // Инициализация устройств
+    audioInput = new QAudioSource(inputDevice, audioFormat, this);
+    audioOutput = new QAudioSink(outputDevice, audioFormat, this);
+
+    audioInputDevice = audioInput->start();
+    audioOutputDevice = audioOutput->start();
+
+    currentSampleRate = sampleRate;
+    updateAudioPacketSize();
+
+    logMessage(QString("Аудио инициализировано: %1 Гц, %2 каналов")
+                   .arg(audioFormat.sampleRate())
+                   .arg(audioFormat.channelCount()));
+
+    return true;
+}
+
 void ChatWindow::checkConnectionActivity()
 {
-    if (!isRemotePeerFound) return;
-
     qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
-    qint64 timeSinceLastPacket = currentTime - lastPacketTime;
+    qint64 timeSinceLastPacket = currentTime - lastPacketReceivedTime;
 
-    if (timeSinceLastPacket > 3000) { // 3 секунды без пакетов
-        if (isRemotePeerFound) {
-            logMessage("Обрыв соединения обнаружен по таймауту");
-            resetConnection();
-        }
+    // Если долго нет пакетов и соединение считалось активным
+    if (timeSinceLastPacket > PACKET_TIMEOUT_MS && isConnectionActive) {
+        isConnectionActive = false;
+        isConnectionBad = true;
+        logMessage("Активация буфера: не получено пакетов в течение " +
+                   QString::number(PACKET_TIMEOUT_MS) + "мс");
+        videoSendTimer->start(500); // Запускаем таймер буферизации
     }
-    else if (timeSinceLastPacket > 1000) { // 1 секунда без пакетов
-        if (totalPackets > 0) {
-            lostPackets++;
-            updatePacketLossStats();
-        }
-    }
-
-    if (isConnectionBad && timeSinceLastPacket < 1000 && packetLossRate < 10.0) {
+    // Если пакеты снова пошли и соединение было неактивно
+    else if (timeSinceLastPacket <= PACKET_TIMEOUT_MS && !isConnectionActive) {
+        isConnectionActive = true;
         isConnectionBad = false;
-        logMessage("Соединение восстановлено после проблем");
+        logMessage("Деактивация буфера: соединение восстановлено");
+        videoSendTimer->stop(); // Останавливаем таймер буферизации
 
-        // Запускаем отправку буферизированных кадров
-        if (!videoBuffer.isEmpty()) {
-            QTimer::singleShot(0, this, [this]() {
-                QMutexLocker locker(&videoBufferMutex);
-                logMessage(QString("Начинаем отправку %1 кадров из буфера")
-                               .arg(videoBuffer.size()));
+        // Немедленная отправка всех буферизированных кадров
+        QTimer::singleShot(0, this, [this]() {
+            QMutexLocker locker(&videoBufferMutex);
+            logMessage(QString("Отправка %1 кадров из буфера").arg(videoBuffer.size()));
 
-                while (!videoBuffer.isEmpty()) {
-                    sendVideoFrameNow(videoBuffer.dequeue());
-                    QThread::msleep(30); // Пауза для избежания перегрузки
-                }
-            });
-        }
+            while (!videoBuffer.isEmpty()) {
+                sendVideoFrameNow(videoBuffer.dequeue());
+                QThread::msleep(30); // Небольшая пауза между кадрами
+            }
+        });
     }
 }
 
@@ -186,20 +280,17 @@ void ChatWindow::sendVideoFrameNow(const QByteArray &frameData)
 {
     if (!udpSocket || remoteAddress.isNull() || frameData.isEmpty()) return;
 
-    try {
-        QByteArray packet;
-        QDataStream stream(&packet, QIODevice::WriteOnly);
-        stream << QString("VIDEO") << instanceId << localNickname << frameData;
+    QByteArray packet;
+    QDataStream stream(&packet, QIODevice::WriteOnly);
+    stream << QString("VIDEO") << instanceId << localNickname << frameData;
 
-        if (udpSocket->writeDatagram(packet, remoteAddress, remotePort) == -1) {
-            if (!isConnectionBad) {
-                isConnectionBad = true;
-                logMessage("Ошибка отправки видео - активация буфера");
-            }
-            addToVideoBuffer(frameData);
+    if (udpSocket->writeDatagram(packet, remoteAddress, remotePort) == -1) {
+        if (!isConnectionBad) {  // Заменили isConnectionActive на isConnectionBad
+            isConnectionBad = true;
+            logMessage("Ошибка отправки - активация буфера");
+            videoSendTimer->start(500);
         }
-    } catch (...) {
-        logMessage("Ошибка при отправке видео кадра");
+        addToVideoBuffer(frameData);
     }
 }
 
@@ -298,7 +389,8 @@ void ChatWindow::updatePacketLossStats()
 
 int ChatWindow::calculateAudioPacketSize() const
 {
-    return (audioFormat.sampleRate() * audioFormat.bytesPerFrame() * currentPacketMs) / 1000;
+    // Размер пакета для текущего формата (в байтах)
+    return (currentSampleRate * audioFormat.bytesPerFrame() * currentPacketMs) / 1000;
 }
 
 void ChatWindow::setupTimers()
@@ -332,51 +424,88 @@ void ChatWindow::setupAudioVideo()
 
 void ChatWindow::initAudioDevices()
 {
-    cleanupAudio();
-
-    // Универсальный формат аудио
-    audioFormat.setSampleRate(48000);
-    audioFormat.setChannelCount(1);
-    audioFormat.setSampleFormat(QAudioFormat::Int16);
-
-    // Получаем устройства
-    QAudioDevice inputDevice = QMediaDevices::defaultAudioInput();
-    QAudioDevice outputDevice = QMediaDevices::defaultAudioOutput();
-
-    // Проверяем и корректируем формат
-    if (!inputDevice.isFormatSupported(audioFormat)) {
-        audioFormat = inputDevice.preferredFormat();
-        logMessage("Используется входной формат: " +
-                   QString::number(audioFormat.sampleRate()) + "Hz, " +
-                   QString::number(audioFormat.channelCount()) + " каналов");
-    }
-
-    // Приводим выходной формат к входному
-    if (!outputDevice.isFormatSupported(audioFormat)) {
-        QAudioFormat preferredOutFormat = outputDevice.preferredFormat();
-        preferredOutFormat.setSampleRate(audioFormat.sampleRate());
-        preferredOutFormat.setChannelCount(audioFormat.channelCount());
-
-        if (outputDevice.isFormatSupported(preferredOutFormat)) {
-            audioFormat = preferredOutFormat;
-        } else {
-            audioFormat = outputDevice.preferredFormat();
+    // Пробуем форматы по порядку предпочтения
+    for (int rate : SUPPORTED_SAMPLE_RATES) {
+        if (initAudioWithSampleRate(rate)) {
+            return;
         }
-        logMessage("Корректировка выходного формата");
     }
 
-    audioBufferSize = calculateAudioPacketSize();
+    // Если ни один формат не поддерживается, используем стандартный с конвертацией
+    audioFormat = QMediaDevices::defaultAudioInput().preferredFormat();
+    currentSampleRate = audioFormat.sampleRate();
 
-    // Инициализация входа
-    audioInput = new QAudioSource(inputDevice, audioFormat, this);
-    audioInput->setBufferSize(audioBufferSize * 3);
-    audioInputDevice = audioInput->start();
-    connect(audioInputDevice, &QIODevice::readyRead, this, &ChatWindow::sendAudioData);
+    QMessageBox::warning(this, "Предупреждение",
+                         QString("Используется формат %1 Гц (автоконвертация)")
+                             .arg(currentSampleRate));
 
-    // Инициализация выхода
-    audioOutput = new QAudioSink(outputDevice, audioFormat, this);
-    audioOutput->setBufferSize(audioBufferSize * 6);
-    audioOutputDevice = audioOutput->start();
+    initAudioWithSampleRate(currentSampleRate);
+}
+
+void ChatWindow::processAudioFormatPacket(QDataStream &stream)
+{
+    int requestedRate;
+    stream >> requestedRate;
+
+    if (requestedRate != currentSampleRate) {
+        QMetaObject::invokeMethod(this, [this, requestedRate]() {
+            changeAudioFormat(requestedRate);
+        }, Qt::QueuedConnection);
+    }
+}
+
+void ChatWindow::changeAudioFormat(int newSampleRate)
+{
+    if (!SUPPORTED_SAMPLE_RATES.contains(newSampleRate)) {
+        showAudioFormatWarning(newSampleRate, currentSampleRate);
+        return;
+    }
+
+    if (newSampleRate == currentSampleRate) {
+        return;
+    }
+
+    if (initAudioWithSampleRate(newSampleRate)) {
+        // Уведомляем удаленную сторону
+        QByteArray packet;
+        QDataStream stream(&packet, QIODevice::WriteOnly);
+        stream << QString("AUDIO_FORMAT") << newSampleRate;
+        udpSocket->writeDatagram(packet, remoteAddress, remotePort);
+    } else {
+        // Пробуем найти ближайший поддерживаемый формат
+        int fallbackRate = findNearestSupportedRate(newSampleRate);
+        showAudioFormatWarning(newSampleRate, fallbackRate);
+        initAudioWithSampleRate(fallbackRate);
+    }
+}
+
+int ChatWindow::findNearestSupportedRate(int desiredRate)
+{
+    int closest = 48000; // Значение по умолчанию
+    int minDiff = INT_MAX;
+
+    for (int rate : SUPPORTED_SAMPLE_RATES) {
+        int diff = abs(rate - desiredRate);
+        if (diff < minDiff) {
+            minDiff = diff;
+            closest = rate;
+        }
+    }
+
+    return closest;
+}
+
+void ChatWindow::updateAudioPacketSize()
+{
+    // Размер пакета в байтах (20 мс аудио)
+    audioBufferSize = (currentSampleRate * sizeof(int16_t) / 50);
+
+    if (audioInput) {
+        audioInput->setBufferSize(audioBufferSize * 3);
+    }
+    if (audioOutput) {
+        audioOutput->setBufferSize(audioBufferSize * 6);
+    }
 }
 
 void ChatWindow::initVideoDevices()
@@ -496,6 +625,8 @@ void ChatWindow::resetConnectionStats()
     lastSequence = -1;
     packetLossRate = 0.0;
     lastPacketTime = 0;
+    isConnectionActive = false;
+    lastPacketReceivedTime = 0;
 
     // Можно добавить лог для отладки
     logMessage("Статистика соединения сброшена");
@@ -512,7 +643,7 @@ void ChatWindow::processAudioPacket(QDataStream &stream)
     missedPings = 0;
 
     // Обновляем время последнего полученного пакета
-    lastPacketTime = QDateTime::currentMSecsSinceEpoch();
+    lastPacketReceivedTime = QDateTime::currentMSecsSinceEpoch();
 
     // Если это первый пакет после разрыва, сбрасываем статистику
     if (!isRemotePeerFound) {
@@ -787,67 +918,110 @@ void ChatWindow::logMessage(const QString &message)
 
 void ChatWindow::videoFrameReady(const QVideoFrame &frame)
 {
-    if (!frame.isValid() || !ui || !ui->localVideoLabel) return;
+    // 1. Проверка валидности данных
+    if (!frame.isValid() || !ui || !ui->localVideoLabel || !udpSocket) {
+        qDebug() << "Invalid frame or UI components not initialized";
+        return;
+    }
 
+    QImage image;
     try {
-        // Локальное отображение
-        QImage image = frame.toImage();
-        if (image.isNull()) return;
-
-        QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->localVideoLabel->size(),
-                                                         Qt::KeepAspectRatio, Qt::SmoothTransformation));
-        if (!pixmap.isNull()) {
-            ui->localVideoLabel->setPixmap(pixmap);
-        }
-
-        // Подготовка кадра для отправки
-        image = image.scaled(640, 480, Qt::KeepAspectRatio);
-        QByteArray imageData;
-        QBuffer buffer(&imageData);
-        if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "JPEG", 80)) {
-            logMessage("Ошибка кодирования видео");
+        // 2. Конвертация видеофрейма
+        image = frame.toImage();
+        if (image.isNull() || image.size().isEmpty()) {
+            qDebug() << "Failed to convert video frame to image";
             return;
         }
 
-        // Безопасная проверка состояния соединения
-        bool currentConnectionBad;
+        // 3. Локальное отображение (в основном потоке)
+        QMetaObject::invokeMethod(this, [this, image]() {
+            if (!ui->localVideoLabel) return;
+
+            QPixmap pixmap = QPixmap::fromImage(
+                image.scaled(ui->localVideoLabel->size(),
+                             Qt::KeepAspectRatio,
+                             Qt::SmoothTransformation)
+                );
+
+            if (!pixmap.isNull()) {
+                ui->localVideoLabel->setPixmap(pixmap);
+            }
+        }, Qt::QueuedConnection);
+
+        // 4. Подготовка к передаче
+        QByteArray imageData;
         {
-            QMutexLocker locker(&audioMutex);
-            currentConnectionBad = (packetLossRate > 30.0 && totalPackets > 50) ||
-                                   !isRemotePeerFound ||
-                                   (QDateTime::currentMSecsSinceEpoch() - lastPacketTime > 3000);
+            QBuffer buffer(&imageData);
+            if (!buffer.open(QIODevice::WriteOnly)) {
+                qDebug() << "Failed to open buffer";
+                return;
+            }
+
+            if (!image.scaled(640, 480, Qt::KeepAspectRatio)
+                     .save(&buffer, "JPEG", 80)) {
+                qDebug() << "Failed to save image";
+                return;
+            }
         }
 
-        // Обработка изменения состояния
-        if (currentConnectionBad != isConnectionBad) {
-            isConnectionBad = currentConnectionBad;
+        // 5. Проверка состояния соединения
+        bool shouldBuffer = false;
+        {
+            QMutexLocker locker(&audioMutex);
+            qint64 currentTime = QDateTime::currentMSecsSinceEpoch();
+            qint64 timeSinceLastPacket = currentTime - lastPacketTime;
 
+            shouldBuffer = !isRemotePeerFound ||
+                           (timeSinceLastPacket > PACKET_TIMEOUT_MS) ||
+                           (packetLossRate > 30.0 && totalPackets > 50);
+        }
+
+        // 6. Безопасная отправка/буферизация
+        if (shouldBuffer) {
+            if (!isConnectionBad) {
+                isConnectionBad = true;
+                QMetaObject::invokeMethod(this, [this]() {
+                    logMessage("Активация буфера видео");
+                }, Qt::QueuedConnection);
+
+                if (videoSendTimer) {
+                    videoSendTimer->start(500);
+                }
+            }
+
+            // Безопасное добавление в буфер
+            QMutexLocker locker(&videoBufferMutex);
+            while (videoBuffer.size() >= maxVideoBufferSize) {
+                videoBuffer.dequeue();
+            }
+            videoBuffer.enqueue(imageData);
+        } else {
             if (isConnectionBad) {
-                logMessage(QString("Проблемы с соединением (потери: %1%), активация буфера")
-                               .arg(packetLossRate, 0, 'f', 1));
-                if (videoSendTimer) videoSendTimer->start(500);
-            } else {
-                logMessage("Соединение восстановлено");
-                if (videoSendTimer) videoSendTimer->stop();
+                isConnectionBad = false;
+                QMetaObject::invokeMethod(this, [this]() {
+                    logMessage("Деактивация буфера");
+                }, Qt::QueuedConnection);
 
-                // Асинхронная отправка буферизированных кадров
-                QTimer::singleShot(0, this, [this]() {
+                if (videoSendTimer) {
+                    videoSendTimer->stop();
+                }
+
+                // Отправка буфера в основном потоке
+                QMetaObject::invokeMethod(this, [this]() {
                     QMutexLocker locker(&videoBufferMutex);
                     while (!videoBuffer.isEmpty()) {
                         sendVideoFrameNow(videoBuffer.dequeue());
                         QThread::msleep(30);
                     }
-                });
+                }, Qt::QueuedConnection);
             }
+
+            sendVideoFrameNow(imageData);
         }
 
-        // Безопасная отправка/буферизация
-        if (!isConnectionBad) {
-            sendVideoFrameNow(imageData);
-        } else {
-            addToVideoBuffer(imageData);
-        }
+    } catch (const std::exception& e) {
+        qCritical() << "Exception in videoFrameReady:" << e.what();
     } catch (...) {
-        logMessage("Критическая ошибка в videoFrameReady");
+        qCritical() << "Unknown exception in videoFrameReady";
     }
 }

@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1000</width>
-    <height>720</height>
+    <height>800</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -25,7 +25,7 @@
         <item>
          <layout class="QHBoxLayout" name="horizontalLayout">
           <item>
-           <widget class="QGroupBox" name="groupBox">
+           <widget class="QGroupBox" name="localVideoGroup">
             <property name="title">
              <string>Локальное видео</string>
             </property>
@@ -46,11 +46,35 @@
                </property>
               </widget>
              </item>
+             <item>
+              <widget class="QComboBox" name="audioFormatCombo">
+               <item>
+                <property name="text">
+                 <string>8000 Гц</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>16000 Гц</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>44100 Гц</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>48000 Гц</string>
+                </property>
+               </item>
+              </widget>
+             </item>
             </layout>
            </widget>
           </item>
           <item>
-           <widget class="QGroupBox" name="groupBox_2">
+           <widget class="QGroupBox" name="remoteVideoGroup">
             <property name="title">
              <string>Удаленное видео</string>
             </property>
@@ -65,6 +89,16 @@
                </property>
                <property name="text">
                 <string>Ожидание подключения...</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="remoteAudioFormatLabel">
+               <property name="text">
+                <string>Аудио: неизвестно</string>
                </property>
                <property name="alignment">
                 <set>Qt::AlignmentFlag::AlignCenter</set>
@@ -132,6 +166,111 @@
             </item>
            </layout>
           </widget>
+          <widget class="QWidget" name="settingsTab">
+           <attribute name="title">
+            <string>Настройки</string>
+           </attribute>
+           <layout class="QVBoxLayout" name="verticalLayout_9">
+            <item>
+             <widget class="QGroupBox" name="audioSettingsGroup">
+              <property name="title">
+               <string>Настройки аудио</string>
+              </property>
+              <layout class="QFormLayout" name="formLayout">
+               <item row="0" column="0">
+                <widget class="QLabel" name="label">
+                 <property name="text">
+                  <string>Формат аудио:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="0" column="1">
+                <widget class="QComboBox" name="audioQualityCombo">
+                 <item>
+                  <property name="text">
+                   <string>Телефонный (8 кГц)</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>VoIP (16 кГц)</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>CD (44.1 кГц)</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>Студия (48 кГц)</string>
+                  </property>
+                 </item>
+                </widget>
+               </item>
+               <item row="1" column="0">
+                <widget class="QLabel" name="label_2">
+                 <property name="text">
+                  <string>Размер аудиопакета:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="1" column="1">
+                <widget class="QComboBox" name="audioPacketSizeCombo">
+                 <item>
+                  <property name="text">
+                   <string>20 мс (минимум)</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>40 мс (оптимум)</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>60 мс (максимум)</string>
+                  </property>
+                 </item>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+            <item>
+             <widget class="QGroupBox" name="videoSettingsGroup">
+              <property name="title">
+               <string>Настройки видео</string>
+              </property>
+              <layout class="QFormLayout" name="formLayout_2">
+               <item row="0" column="0">
+                <widget class="QLabel" name="label_3">
+                 <property name="text">
+                  <string>Качество видео:</string>
+                 </property>
+                </widget>
+               </item>
+               <item row="0" column="1">
+                <widget class="QSlider" name="videoQualitySlider">
+                 <property name="minimum">
+                  <number>10</number>
+                 </property>
+                 <property name="maximum">
+                  <number>100</number>
+                 </property>
+                 <property name="value">
+                  <number>80</number>
+                 </property>
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Horizontal</enum>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </widget>
          </widget>
         </item>
        </layout>
@@ -153,22 +292,66 @@
      </widget>
     </item>
     <item>
-     <widget class="QGroupBox" name="groupBox_4">
+     <widget class="QGroupBox" name="bufferControlGroup">
       <property name="title">
        <string>Управление буфером</string>
       </property>
       <layout class="QHBoxLayout" name="horizontalLayout_4">
        <item>
-        <widget class="QLabel" name="label">
+        <widget class="QLabel" name="bufferSizeLabel">
          <property name="text">
-          <string>Размер буфера (кадров):</string>
+          <string>Размер видео буфера (кадров):</string>
          </property>
         </widget>
        </item>
        <item>
-        <widget class="QSpinBox" name="bufferSizeSpinBox"/>
+        <widget class="QSpinBox" name="bufferSizeSpinBox">
+         <property name="minimum">
+          <number>1</number>
+         </property>
+         <property name="maximum">
+          <number>30</number>
+         </property>
+         <property name="value">
+          <number>10</number>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="audioBufferLabel">
+         <property name="text">
+          <string>Аудио буфер (пакетов):</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSpinBox" name="audioBufferSpinBox">
+         <property name="minimum">
+          <number>1</number>
+         </property>
+         <property name="maximum">
+          <number>10</number>
+         </property>
+         <property name="value">
+          <number>3</number>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="applySettingsButton">
+         <property name="text">
+          <string>Применить настройки</string>
+         </property>
+        </widget>
        </item>
       </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QStatusBar" name="statusBar">
+      <property name="sizeGripEnabled">
+       <bool>false</bool>
+      </property>
      </widget>
     </item>
    </layout>

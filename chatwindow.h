@@ -38,6 +38,10 @@ private slots:
     void videoFrameReady(const QVideoFrame &frame);
     void on_sendButton_clicked();
     void showStatus();
+    void showAudioFormatWarning(int requestedRate, int actualRate);
+    void onAudioFormatChanged(int index);
+    void applySettings();
+
 
 private:
     Ui::ChatWindow *ui;
@@ -53,6 +57,7 @@ private:
 
     void checkAudioTiming();
     void updatePacketLossStats();
+    int findNearestSupportedRate(int desiredRate);
 
     // Audio
     QAudioFormat audioFormat;
@@ -124,6 +129,18 @@ private:
     void checkConnectionActivity();
     void sendBufferedVideoFrames();
     void resetConnectionStats();
+    const qint64 PACKET_TIMEOUT_MS = 1000;
+    bool isConnectionActive = false;
+    qint64 lastPacketReceivedTime = 0;
+
+    const QList<int> SUPPORTED_SAMPLE_RATES = {8000, 11025, 16000, 22050, 44100, 48000};
+    int currentSampleRate = 48000; // Текущая частота дискретизации
+
+    // Методы для работы с форматами
+    bool initAudioWithSampleRate(int sampleRate);
+    void updateAudioPacketSize();
+    void processAudioFormatPacket(QDataStream &stream);
+    void changeAudioFormat(int newSampleRate);
 };
 
 #endif // CHATWINDOW_H
