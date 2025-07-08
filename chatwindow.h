@@ -38,9 +38,18 @@ private slots:
     void videoFrameReady(const QVideoFrame &frame);
     void on_sendButton_clicked();
     void showStatus();
+    void playBufferedVideo();
+    void updateVideoBufferSettings();
 
 private:
     Ui::ChatWindow *ui;
+
+    bool isPlayingFromBuffer = false;
+    QElapsedTimer networkLossTimer;
+    qint64 lastGoodPacketTime = 0;
+    void handleNetworkLoss();
+    void handleNetworkRestored();
+    bool isNetworkActive = false;
 
     // Network
     QUdpSocket *udpSocket;
@@ -111,10 +120,19 @@ private:
     void logMessage(const QString &message);
     int calculateAudioPacketSize() const;
 
-    QQueue<QImage> videoFrameQueue;
+    // Video buffer
+    QQueue<QImage> videoBuffer;
     QMutex videoMutex;
+    bool videoBufferEnabled = true;
+    int videoBufferSize = 5;
+    qint64 lastVideoPacketTime = 0;
     QTimer *videoPlaybackTimer;
-    const int VIDEO_BUFFER_SIZE = 5; // Макс. количество кадров в буфере
+
+    void displayVideoFrame(const QImage &image);
+
+    int playbackSpeed = 30; // начальная скорость воспроизведения (FPS)
+    QElapsedTimer bufferPlaybackTimer;
+    int framesPlayedFromBuffer = 0;
 };
 
 #endif // CHATWINDOW_H
