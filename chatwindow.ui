@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>1000</width>
-    <height>800</height>
+    <height>750</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -18,7 +18,7 @@
     <item>
      <layout class="QHBoxLayout" name="horizontalLayout">
       <item>
-       <widget class="QGroupBox" name="localVideoGroup">
+       <widget class="QGroupBox" name="groupBox">
         <property name="title">
          <string>Локальное видео</string>
         </property>
@@ -43,7 +43,7 @@
        </widget>
       </item>
       <item>
-       <widget class="QGroupBox" name="remoteVideoGroup">
+       <widget class="QGroupBox" name="groupBox_2">
         <property name="title">
          <string>Удаленное видео</string>
         </property>
@@ -69,101 +69,71 @@
       </item>
      </layout>
     </item>
+
+    <!-- Новый блок управления буферизацией -->
     <item>
-     <widget class="QGroupBox" name="settingsGroup">
+     <widget class="QGroupBox" name="bufferingGroupBox">
       <property name="title">
-       <string>Настройки</string>
+       <string>Управление буферизацией видео</string>
       </property>
       <layout class="QHBoxLayout" name="horizontalLayout_4">
        <item>
-        <widget class="QGroupBox" name="videoSettingsGroup">
-         <property name="title">
-          <string>Настройки видео</string>
+        <widget class="QLabel" name="bufferSizeLabel">
+         <property name="text">
+          <string>Размер буфера (кадров):</string>
          </property>
-         <layout class="QVBoxLayout" name="verticalLayout_5">
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayout_5">
-            <item>
-             <widget class="QLabel" name="videoBufferLabel">
-              <property name="text">
-               <string>Буфер кадров:</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="videoBufferSpin">
-              <property name="minimum">
-               <number>1</number>
-              </property>
-              <property name="maximum">
-               <number>30</number>
-              </property>
-              <property name="value">
-               <number>5</number>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
-           <widget class="QCheckBox" name="enableBufferCheck">
-            <property name="text">
-             <string>Включить буферизацию видео</string>
-            </property>
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-         </layout>
         </widget>
        </item>
        <item>
-        <widget class="QGroupBox" name="audioSettingsGroup">
-         <property name="title">
-          <string>Настройки аудио</string>
+        <widget class="QSpinBox" name="bufferSizeSpinBox">
+         <property name="minimum">
+          <number>1</number>
          </property>
-         <layout class="QVBoxLayout" name="verticalLayout_6">
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayout_6">
-            <item>
-             <widget class="QLabel" name="audioPacketLabel">
-              <property name="text">
-               <string>Размер пакета (мс):</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QSpinBox" name="audioPacketSpin">
-              <property name="minimum">
-               <number>20</number>
-              </property>
-              <property name="maximum">
-               <number>60</number>
-              </property>
-              <property name="value">
-               <number>40</number>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </item>
-          <item>
-           <widget class="QCheckBox" name="autoAdjustCheck">
-            <property name="text">
-             <string>Автонастройка параметров</string>
-            </property>
-            <property name="checked">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-         </layout>
+         <property name="maximum">
+          <number>30</number>
+         </property>
+         <property name="value">
+          <number>5</number>
+         </property>
+         <property name="toolTip">
+          <string>Количество кадров для буферизации перед воспроизведением</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="applyBufferButton">
+         <property name="text">
+          <string>Применить</string>
+         </property>
+         <property name="toolTip">
+          <string>Установить новый размер буфера</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="bufferStatusLabel">
+         <property name="text">
+          <string>Текущий буфер: 5 кадров</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="enableBufferingCheckBox">
+         <property name="text">
+          <string>Включить буферизацию</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+         <property name="toolTip">
+          <string>Включить/выключить буферизацию видео</string>
+         </property>
         </widget>
        </item>
       </layout>
      </widget>
     </item>
+
     <item>
      <layout class="QHBoxLayout" name="horizontalLayout_2">
       <item>
@@ -188,11 +158,7 @@ p, li { white-space: pre-wrap; }
     <item>
      <layout class="QHBoxLayout" name="horizontalLayout_3">
       <item>
-       <widget class="QLineEdit" name="messageEdit">
-        <property name="placeholderText">
-         <string>Введите сообщение...</string>
-        </property>
-       </widget>
+       <widget class="QLineEdit" name="messageEdit"/>
       </item>
       <item>
        <widget class="QPushButton" name="sendButton">
@@ -201,17 +167,10 @@ p, li { white-space: pre-wrap; }
         </property>
        </widget>
       </item>
-      <item>
-       <widget class="QPushButton" name="statusButton">
-        <property name="text">
-         <string>Статус</string>
-        </property>
-       </widget>
-      </item>
      </layout>
     </item>
     <item>
-     <widget class="QGroupBox" name="debugGroup">
+     <widget class="QGroupBox" name="groupBox_3">
       <property name="title">
        <string>Отладка</string>
       </property>
@@ -234,24 +193,18 @@ p, li { white-space: pre-wrap; }
     </item>
    </layout>
   </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1000</width>
+     <height>22</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
  </widget>
  <resources/>
- <connections>
-  <connection>
-   <sender>sendButton</sender>
-   <signal>clicked()</signal>
-   <receiver>ChatWindow</receiver>
-   <slot>on_sendButton_clicked()</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>467</x>
-     <y>335</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>233</x>
-     <y>233</y>
-    </hint>
-   </hints>
-  </connection>
- </connections>
+ <connections/>
 </ui>
