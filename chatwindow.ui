@@ -84,6 +84,23 @@ li.checked::marker { content: &quot;\2612&quot;; }
         </item>
        </layout>
       </widget>
+      <widget class="QWidget" name="bitrateTab">
+       <attribute name="title">
+        <string>Битрейт</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayout_bitrate">
+        <item>
+         <widget class="QChartView" name="bitrateChartView" native="true">
+          <property name="minimumSize">
+           <size>
+            <width>640</width>
+            <height>480</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
       <widget class="QWidget" name="settingsTab">
        <attribute name="title">
         <string>Настройки</string>
@@ -274,6 +291,13 @@ li.checked::marker { content: &quot;\2612&quot;; }
   </widget>
   <widget class="QStatusBar" name="statusbar"/>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>QChartView</class>
+   <extends>QWidget</extends>
+   <header>qchartview.h</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections/>
 </ui>
