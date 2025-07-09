@@ -43,9 +43,6 @@ ChatWindow::ChatWindow(QWidget *parent)
     // Настройка аудио/видео
     setupAudioVideo();
 
-    // Кнопка статуса
-    setupStatusButton();
-
     logMessage("Система готова. Ваш ник: " + localNickname);
     logConnectionQuality();
     QTimer::singleShot(1000, this, &ChatWindow::sendDiscover);
@@ -232,13 +229,6 @@ void ChatWindow::initVideoDevices()
     } else {
         logMessage("Камера не обнаружена");
     }
-}
-
-void ChatWindow::setupStatusButton()
-{
-    QPushButton *statusBtn = new QPushButton("Статус", this);
-    connect(statusBtn, &QPushButton::clicked, this, &ChatWindow::showStatus);
-    ui->verticalLayout->addWidget(statusBtn);
 }
 
 void ChatWindow::cleanupAudio()

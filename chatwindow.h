@@ -43,7 +43,7 @@ private slots:
 private:
     Ui::ChatWindow *ui;
 
-        // Video buffering
+    // Video buffering
     QQueue<QImage> videoBuffer;
     int maxBufferSize = 5; // Количество кадров в буфере
     QMutex videoMutex;
@@ -102,7 +102,6 @@ private:
 
     void setupTimers();
     void setupAudioVideo();
-    void setupStatusButton();
     void initAudioDevices();
     void initVideoDevices();
     void cleanupAudio();
