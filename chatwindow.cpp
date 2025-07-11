@@ -61,6 +61,7 @@ ChatWindow::~ChatWindow()
         camera->stop();
         delete camera;
     }
+    videoTimer.stop();
     delete ui;
 }
 
@@ -472,7 +473,12 @@ void ChatWindow::processKeepAlive(QDataStream &stream, const QHostAddress &sende
 
 void ChatWindow::processBufferedVideo()
 {
-    if (videoBuffer.isEmpty()) return;
+    QMutexLocker locker(&videoMutex);
+
+    // Выходим если буфер не заполнен до нужного размера
+    if (videoBuffer.size() < maxBufferSize) {
+        return;
+    }
 
     // Берем самый старый кадр из буфера
     QImage image = videoBuffer.dequeue();
@@ -481,10 +487,20 @@ void ChatWindow::processBufferedVideo()
     QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->remoteVideoLabel->size(),
                                                      Qt::KeepAspectRatio, Qt::SmoothTransformation));
     ui->remoteVideoLabel->setPixmap(pixmap);
+}
 
-    // Если в буфере остались кадры, планируем следующий
-    if (!videoBuffer.isEmpty()) {
-        QTimer::singleShot(33, this, &ChatWindow::processBufferedVideo); // ~30 FPS
+void ChatWindow::timerEvent(QTimerEvent *event)
+{
+    if (event->timerId() == videoTimer.timerId()) {
+        processBufferedVideo();
+
+        // Останавливаем таймер если буфер опустел ниже порога
+        QMutexLocker locker(&videoMutex);
+        if (videoBuffer.size() < maxBufferSize/2) { // Половина от максимального размера
+            videoTimer.stop();
+        }
+    } else {
+        QMainWindow::timerEvent(event);
     }
 }
 
@@ -508,9 +524,9 @@ void ChatWindow::processVideoPacket(QDataStream &stream)
             videoBuffer.dequeue();
         }
 
-        // Если буфер заполнен, начинаем воспроизведение
-        if (videoBuffer.size() >= maxBufferSize) {
-            processBufferedVideo();
+        // Запускаем таймер только когда буфер полностью заполнен
+        if (videoBuffer.size() >= maxBufferSize && !videoTimer.isActive()) {
+            videoTimer.start(33, this);
         }
     }
 }

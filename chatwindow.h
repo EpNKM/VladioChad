@@ -135,6 +135,8 @@ private:
     bool isLocalAddress(const QHostAddress &address);
     void logMessage(const QString &message);
     int calculateAudioPacketSize() const;
+    void timerEvent(QTimerEvent *event);
+    QBasicTimer videoTimer;
 };
 
 #endif // CHATWINDOW_H
