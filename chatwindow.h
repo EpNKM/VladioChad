@@ -17,10 +17,6 @@
 #include <QScrollBar>
 #include <QMediaDevices>
 #include <QCameraDevice>
-#include <QtCharts/QChartView>
-#include <QtCharts/QLineSeries>
-#include <QtCharts/QValueAxis>
-
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class ChatWindow; }
@@ -46,20 +42,6 @@ private slots:
 
 private:
     Ui::ChatWindow *ui;
-    // График битрейта
-    QChart *bitrateChart;
-    QLineSeries *bitrateSeries;
-    QValueAxis *axisX;
-    QValueAxis *axisY;
-    QList<qreal> bitrateHistory;
-    QElapsedTimer bitrateTimer;
-    qint64 totalBytesSent = 0;
-    qint64 totalBytesReceived = 0;
-    qint64 lastUpdateBytesSent = 0;
-    qint64 lastUpdateBytesReceived = 0;
-
-    void updateBitrateChart();
-    void setupBitrateChart();
 
     // Video buffering
     QQueue<QImage> videoBuffer;
@@ -135,8 +117,6 @@ private:
     bool isLocalAddress(const QHostAddress &address);
     void logMessage(const QString &message);
     int calculateAudioPacketSize() const;
-    void timerEvent(QTimerEvent *event);
-    QBasicTimer videoTimer;
 };
 
 #endif // CHATWINDOW_H

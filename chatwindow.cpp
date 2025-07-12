@@ -49,8 +49,6 @@ ChatWindow::ChatWindow(QWidget *parent)
 
     connect(ui->applyBufferButton, &QPushButton::clicked,
             this, &ChatWindow::on_applyBufferButton_clicked);
-
-    setupBitrateChart();
 }
 
 
@@ -61,79 +59,7 @@ ChatWindow::~ChatWindow()
         camera->stop();
         delete camera;
     }
-    videoTimer.stop();
     delete ui;
-}
-
-void ChatWindow::setupBitrateChart()
-{
-    bitrateChart = new QChart();
-    bitrateChart->setTitle("Битрейт (кбит/с)");
-    bitrateChart->legend()->hide();
-    bitrateChart->setBackgroundRoundness(0);
-
-    bitrateSeries = new QLineSeries();
-    bitrateChart->addSeries(bitrateSeries);
-
-    axisX = new QValueAxis();
-    axisX->setRange(0, 60);
-    axisX->setLabelFormat("%d");
-    axisX->setTitleText("Секунды");
-    bitrateChart->addAxis(axisX, Qt::AlignBottom);
-    bitrateSeries->attachAxis(axisX);
-
-    axisY = new QValueAxis();
-    axisY->setRange(0, 2000); // 0-2000 кбит/с
-    axisY->setTitleText("кбит/с");
-    bitrateChart->addAxis(axisY, Qt::AlignLeft);
-    bitrateSeries->attachAxis(axisY);
-
-    ui->bitrateChartView->setChart(bitrateChart);
-    ui->bitrateChartView->setRenderHint(QPainter::Antialiasing);
-
-    bitrateTimer.start();
-    QTimer *bitrateUpdateTimer = new QTimer(this);
-    connect(bitrateUpdateTimer, &QTimer::timeout, this, &ChatWindow::updateBitrateChart);
-    bitrateUpdateTimer->start(1000); // Обновление каждую секунду
-}
-
-void ChatWindow::updateBitrateChart()
-{
-    qint64 elapsed = bitrateTimer.restart();
-    if (elapsed == 0) return;
-
-    // Получаем текущие значения
-    qint64 currentSent = totalBytesSent;
-    qint64 currentReceived = totalBytesReceived;
-
-    // Рассчитываем битрейт (кбит/с)
-    qreal sentKbps = (currentSent - lastUpdateBytesSent) * 8 / (qreal)elapsed / 1000.0;
-    qreal receivedKbps = (currentReceived - lastUpdateBytesReceived) * 8 / (qreal)elapsed / 1000.0;
-    qreal totalKbps = sentKbps + receivedKbps;
-
-    lastUpdateBytesSent = currentSent;
-    lastUpdateBytesReceived = currentReceived;
-
-    // Сохраняем историю (60 секунд)
-    bitrateHistory.append(totalKbps);
-    if (bitrateHistory.size() > 60) {
-        bitrateHistory.removeFirst();
-    }
-
-    // Обновляем график
-    bitrateSeries->clear();
-    for (int i = 0; i < bitrateHistory.size(); ++i) {
-        bitrateSeries->append(i, bitrateHistory.at(i));
-    }
-
-    // Автомасштабирование оси Y
-    qreal max = *std::max_element(bitrateHistory.begin(), bitrateHistory.end());
-    axisY->setRange(0, qMax(100.0, max * 1.1));
-
-    // Обновляем статус в заголовке
-    bitrateChart->setTitle(QString("Битрейт | TX: %1 кбит/с RX: %2 кбит/с")
-                               .arg(sentKbps, 0, 'f', 1)
-                               .arg(receivedKbps, 0, 'f', 1));
 }
 
 void ChatWindow::on_applyBufferButton_clicked()
@@ -337,10 +263,7 @@ void ChatWindow::sendAudioData()
         QDataStream stream(&packet, QIODevice::WriteOnly);
         stream << QString("AUDIO") << instanceId << localNickname << ++lastSequence << audioData;
 
-        qint64 bytesSent = udpSocket->writeDatagram(packet, remoteAddress, remotePort);
-        if (bytesSent != -1) {
-            totalBytesSent += bytesSent;
-        }
+        udpSocket->writeDatagram(packet, remoteAddress, remotePort);
     }
 }
 
@@ -348,7 +271,6 @@ void ChatWindow::readPendingDatagrams()
 {
     while (udpSocket->hasPendingDatagrams()) {
         QNetworkDatagram datagram = udpSocket->receiveDatagram();
-        totalBytesReceived += datagram.data().size();
         if (!datagram.isValid() || isLocalAddress(datagram.senderAddress())) {
             continue;
         }
@@ -473,12 +395,7 @@ void ChatWindow::processKeepAlive(QDataStream &stream, const QHostAddress &sende
 
 void ChatWindow::processBufferedVideo()
 {
-    QMutexLocker locker(&videoMutex);
-
-    // Выходим если буфер не заполнен до нужного размера
-    if (videoBuffer.size() < maxBufferSize) {
-        return;
-    }
+    if (videoBuffer.isEmpty()) return;
 
     // Берем самый старый кадр из буфера
     QImage image = videoBuffer.dequeue();
@@ -487,20 +404,10 @@ void ChatWindow::processBufferedVideo()
     QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->remoteVideoLabel->size(),
                                                      Qt::KeepAspectRatio, Qt::SmoothTransformation));
     ui->remoteVideoLabel->setPixmap(pixmap);
-}
 
-void ChatWindow::timerEvent(QTimerEvent *event)
-{
-    if (event->timerId() == videoTimer.timerId()) {
-        processBufferedVideo();
-
-        // Останавливаем таймер если буфер опустел ниже порога
-        QMutexLocker locker(&videoMutex);
-        if (videoBuffer.size() < maxBufferSize/2) { // Половина от максимального размера
-            videoTimer.stop();
-        }
-    } else {
-        QMainWindow::timerEvent(event);
+    // Если в буфере остались кадры, планируем следующий
+    if (!videoBuffer.isEmpty()) {
+        QTimer::singleShot(100, this, &ChatWindow::processBufferedVideo); // ~30 FPS
     }
 }
 
@@ -524,9 +431,9 @@ void ChatWindow::processVideoPacket(QDataStream &stream)
             videoBuffer.dequeue();
         }
 
-        // Запускаем таймер только когда буфер полностью заполнен
-        if (videoBuffer.size() >= maxBufferSize && !videoTimer.isActive()) {
-            videoTimer.start(33, this);
+        // Если буфер заполнен, начинаем воспроизведение
+        if (videoBuffer.size() >= maxBufferSize) {
+            processBufferedVideo();
         }
     }
 }
