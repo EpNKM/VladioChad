@@ -188,6 +188,23 @@ li.checked::marker { content: &quot;\2612&quot;; }
              </property>
             </widget>
            </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="label_5">
+             <property name="text">
+              <string>Буферизация видео:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QCheckBox" name="videoBufferCheckBox">
+             <property name="text">
+              <string>Включить буферизацию</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>
@@ -222,6 +239,23 @@ li.checked::marker { content: &quot;\2612&quot;; }
             <widget class="QLabel" name="audioFormatLabel">
              <property name="text">
               <string>48000 Hz, 1 канал</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="label_6">
+             <property name="text">
+              <string>Буферизация аудио:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QCheckBox" name="audioBufferCheckBox">
+             <property name="text">
+              <string>Включить буферизацию</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
              </property>
             </widget>
            </item>

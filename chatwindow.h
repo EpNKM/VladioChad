@@ -17,6 +17,10 @@
 #include <QScrollBar>
 #include <QMediaDevices>
 #include <QCameraDevice>
+#include <QtCharts/QChartView>
+#include <QtCharts/QLineSeries>
+#include <QtCharts/QValueAxis>
+#include <QBasicTimer>
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class ChatWindow; }
@@ -39,6 +43,8 @@ private slots:
     void on_sendButton_clicked();
     void showStatus();
     void on_applyBufferButton_clicked();
+    void on_videoBufferCheckBox_stateChanged(int state);
+    void on_audioBufferCheckBox_stateChanged(int state);
 
 private:
     Ui::ChatWindow *ui;
@@ -48,7 +54,30 @@ private:
     int maxBufferSize = 5; // Количество кадров в буфере
     QMutex videoMutex;
 
+    bool videoBufferingEnabled = true;
+    bool audioBufferingEnabled = true;
+
     void processBufferedVideo();
+
+    // График битрейта
+    QLineSeries *bitrateSeriesRx;
+    QLineSeries *bitrateSeriesTx;
+    QList<qreal> bitrateHistoryRx;
+    QList<qreal> bitrateHistoryTx;
+    QChart *bitrateChart;
+    QValueAxis *axisX;
+    QValueAxis *axisY;
+    QElapsedTimer bitrateTimer;
+    qint64 totalBytesSent = 0;
+    qint64 totalBytesReceived = 0;
+    qint64 lastUpdateBytesSent = 0;
+    qint64 lastUpdateBytesReceived = 0;
+    QBasicTimer videoTimer;
+
+    // Методы
+    void updateBitrateChart();
+    void setupBitrateChart();
+    void timerEvent(QTimerEvent *event) override;
 
     // Network
     QUdpSocket *udpSocket;

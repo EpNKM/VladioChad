@@ -49,6 +49,8 @@ ChatWindow::ChatWindow(QWidget *parent)
 
     connect(ui->applyBufferButton, &QPushButton::clicked,
             this, &ChatWindow::on_applyBufferButton_clicked);
+
+    setupBitrateChart();
 }
 
 
@@ -59,7 +61,133 @@ ChatWindow::~ChatWindow()
         camera->stop();
         delete camera;
     }
+    videoTimer.stop();
     delete ui;
+}
+
+void ChatWindow::on_videoBufferCheckBox_stateChanged(int state)
+{
+    videoBufferingEnabled = (state == Qt::Checked);
+    ui->bufferSizeSpinBox->setEnabled(videoBufferingEnabled);
+    ui->applyBufferButton->setEnabled(videoBufferingEnabled);
+
+    if (!videoBufferingEnabled) {
+        QMutexLocker locker(&videoMutex);
+        videoBuffer.clear();
+    }
+    logMessage(QString("Буферизация видео %1")
+                   .arg(videoBufferingEnabled ? "включена" : "отключена"));
+}
+
+void ChatWindow::on_audioBufferCheckBox_stateChanged(int state)
+{
+    audioBufferingEnabled = (state == Qt::Checked);
+    logMessage(QString("Буферизация аудио %1")
+                   .arg(audioBufferingEnabled ? "включена" : "отключена"));
+}
+
+void ChatWindow::setupBitrateChart()
+{
+    bitrateChart = new QChart();
+    bitrateChart->setTitle("Битрейт (кбит/с)");
+    bitrateChart->legend()->setVisible(true);
+    bitrateChart->setBackgroundRoundness(0);
+
+    // Серии для RX и TX
+    bitrateSeriesRx = new QLineSeries();
+    bitrateSeriesRx->setName("RX (входящий)");
+    bitrateSeriesRx->setColor(Qt::blue);
+
+    bitrateSeriesTx = new QLineSeries();
+    bitrateSeriesTx->setName("TX (исходящий)");
+    bitrateSeriesTx->setColor(Qt::red);
+
+    bitrateChart->addSeries(bitrateSeriesRx);
+    bitrateChart->addSeries(bitrateSeriesTx);
+
+    axisX = new QValueAxis();
+    axisX->setRange(0, 60);
+    axisX->setLabelFormat("%d");
+    axisX->setTitleText("Секунды");
+    bitrateChart->addAxis(axisX, Qt::AlignBottom);
+    bitrateSeriesRx->attachAxis(axisX);
+    bitrateSeriesTx->attachAxis(axisX);
+
+    axisY = new QValueAxis();
+    axisY->setRange(0, 2000); // 0-2000 кбит/с
+    axisY->setTitleText("кбит/с");
+    bitrateChart->addAxis(axisY, Qt::AlignLeft);
+    bitrateSeriesRx->attachAxis(axisY);
+    bitrateSeriesTx->attachAxis(axisY);
+
+    ui->bitrateChartView->setChart(bitrateChart);
+    ui->bitrateChartView->setRenderHint(QPainter::Antialiasing);
+
+    bitrateTimer.start();
+    QTimer *bitrateUpdateTimer = new QTimer(this);
+    connect(bitrateUpdateTimer, &QTimer::timeout, this, &ChatWindow::updateBitrateChart);
+    bitrateUpdateTimer->start(1000);
+}
+
+void ChatWindow::updateBitrateChart()
+{
+    qint64 elapsed = bitrateTimer.restart();
+    if (elapsed == 0) return;
+
+    // Получаем текущие значения
+    qint64 currentSent = totalBytesSent;
+    qint64 currentReceived = totalBytesReceived;
+
+    // Рассчитываем битрейт (кбит/с)
+    qreal sentKbps = (currentSent - lastUpdateBytesSent) * 8 / (qreal)elapsed / 1000.0;
+    qreal receivedKbps = (currentReceived - lastUpdateBytesReceived) * 8 / (qreal)elapsed / 1000.0;
+
+    lastUpdateBytesSent = currentSent;
+    lastUpdateBytesReceived = currentReceived;
+
+    // Сохраняем историю (60 секунд)
+    bitrateHistoryRx.append(receivedKbps);
+    bitrateHistoryTx.append(sentKbps);
+
+    if (bitrateHistoryRx.size() > 60) {
+        bitrateHistoryRx.removeFirst();
+        bitrateHistoryTx.removeFirst();
+    }
+
+    // Обновляем график
+    bitrateSeriesRx->clear();
+    bitrateSeriesTx->clear();
+
+    for (int i = 0; i < bitrateHistoryRx.size(); ++i) {
+        bitrateSeriesRx->append(i, bitrateHistoryRx.at(i));
+        bitrateSeriesTx->append(i, bitrateHistoryTx.at(i));
+    }
+
+    // Автомасштабирование оси Y
+    qreal maxRx = *std::max_element(bitrateHistoryRx.begin(), bitrateHistoryRx.end());
+    qreal maxTx = *std::max_element(bitrateHistoryTx.begin(), bitrateHistoryTx.end());
+    qreal max = qMax(maxRx, maxTx);
+    axisY->setRange(0, qMax(100.0, max * 1.1));
+
+    // Обновляем статус в заголовке
+    bitrateChart->setTitle(QString("Битрейт | TX: %1 кбит/с RX: %2 кбит/с")
+                               .arg(sentKbps, 0, 'f', 1)
+                               .arg(receivedKbps, 0, 'f', 1));
+}
+
+void ChatWindow::timerEvent(QTimerEvent *event)
+{
+    if (event->timerId() == videoTimer.timerId()) {
+        processBufferedVideo();
+
+        // Останавливаем таймер если буфер опустел ниже порога
+        QMutexLocker locker(&videoMutex);
+        if (videoBuffer.size() < maxBufferSize/2) {
+            videoTimer.stop();
+        }
+    } else {
+        QMainWindow::timerEvent(event);
+    }
 }
 
 void ChatWindow::on_applyBufferButton_clicked()
@@ -263,7 +391,10 @@ void ChatWindow::sendAudioData()
         QDataStream stream(&packet, QIODevice::WriteOnly);
         stream << QString("AUDIO") << instanceId << localNickname << ++lastSequence << audioData;
 
-        udpSocket->writeDatagram(packet, remoteAddress, remotePort);
+        qint64 bytesSent = udpSocket->writeDatagram(packet, remoteAddress, remotePort);
+        if (bytesSent != -1) {
+            totalBytesSent += bytesSent;
+        }
     }
 }
 
@@ -271,6 +402,7 @@ void ChatWindow::readPendingDatagrams()
 {
     while (udpSocket->hasPendingDatagrams()) {
         QNetworkDatagram datagram = udpSocket->receiveDatagram();
+        totalBytesReceived += datagram.data().size();
         if (!datagram.isValid() || isLocalAddress(datagram.senderAddress())) {
             continue;
         }
@@ -310,7 +442,6 @@ void ChatWindow::processAudioPacket(QDataStream &stream)
 
     totalPackets++;
 
-    // Проверка пропущенных пакетов
     if (lastSequence != -1 && sequence > lastSequence + 1) {
         lostPackets += sequence - lastSequence - 1;
         updatePacketLossStats();
@@ -319,17 +450,18 @@ void ChatWindow::processAudioPacket(QDataStream &stream)
 
     if (id == instanceId || !audioOutputDevice) return;
 
-    QMutexLocker locker(&audioMutex);
-    audioQueue.enqueue(audioData);
-
-    // Поддерживаем оптимальный размер очереди
-    while (audioQueue.size() > TARGET_QUEUE_SIZE * 2) {
-        audioQueue.dequeue();
-    }
-
-    // Воспроизводим, если накопилось достаточно данных
-    if (audioQueue.size() >= TARGET_QUEUE_SIZE) {
-        audioOutputDevice->write(audioQueue.dequeue());
+    if (audioBufferingEnabled) {
+        QMutexLocker locker(&audioMutex);
+        audioQueue.enqueue(audioData);
+        while (audioQueue.size() > TARGET_QUEUE_SIZE * 2) {
+            audioQueue.dequeue();
+        }
+        if (audioQueue.size() >= TARGET_QUEUE_SIZE) {
+            audioOutputDevice->write(audioQueue.dequeue());
+        }
+    } else {
+        // Прямая передача без буферизации
+        audioOutputDevice->write(audioData);
     }
 }
 
@@ -421,19 +553,20 @@ void ChatWindow::processVideoPacket(QDataStream &stream)
 
     QImage image;
     if (image.loadFromData(imageData, "JPEG")) {
-        QMutexLocker locker(&videoMutex);
-
-        // Добавляем кадр в буфер
-        videoBuffer.enqueue(image);
-
-        // Удаляем старые кадры, если буфер переполнен
-        while (videoBuffer.size() > maxBufferSize) {
-            videoBuffer.dequeue();
-        }
-
-        // Если буфер заполнен, начинаем воспроизведение
-        if (videoBuffer.size() >= maxBufferSize) {
-            processBufferedVideo();
+        if (videoBufferingEnabled) {
+            QMutexLocker locker(&videoMutex);
+            videoBuffer.enqueue(image);
+            while (videoBuffer.size() > maxBufferSize) {
+                videoBuffer.dequeue();
+            }
+            if (videoBuffer.size() >= maxBufferSize) {
+                processBufferedVideo();
+            }
+        } else {
+            // Прямое отображение без буферизации
+            QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->remoteVideoLabel->size(),
+                                                             Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            ui->remoteVideoLabel->setPixmap(pixmap);
         }
     }
 }
