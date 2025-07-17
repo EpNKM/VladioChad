@@ -74,18 +74,24 @@ ChatWindow::~ChatWindow()
 void ChatWindow::setupBitrateChart()
 {
     bitrateChart = new QChart();
-    bitrateChart->setTitle("Битрейт (кбит/с)");
+    bitrateChart->setTitle("Битрейт (Мбит/с)");
     bitrateChart->legend()->setVisible(true);
+    bitrateChart->legend()->setAlignment(Qt::AlignBottom);
     bitrateChart->setBackgroundRoundness(0);
+    bitrateChart->setMargins(QMargins(0, 0, 0, 0));
 
     // Серии для RX и TX
     bitrateSeriesRx = new QLineSeries();
     bitrateSeriesRx->setName("RX (входящий)");
-    bitrateSeriesRx->setColor(Qt::blue);
+    QPen bluePen(Qt::blue);
+    bluePen.setWidth(2);
+    bitrateSeriesRx->setPen(bluePen);
 
     bitrateSeriesTx = new QLineSeries();
     bitrateSeriesTx->setName("TX (исходящий)");
-    bitrateSeriesTx->setColor(Qt::red);
+    QPen redPen(Qt::red);
+    redPen.setWidth(2);
+    bitrateSeriesTx->setPen(redPen);
 
     bitrateChart->addSeries(bitrateSeriesRx);
     bitrateChart->addSeries(bitrateSeriesTx);
@@ -94,13 +100,15 @@ void ChatWindow::setupBitrateChart()
     axisX->setRange(0, 60);
     axisX->setLabelFormat("%d");
     axisX->setTitleText("Секунды");
+    axisX->setTickCount(7);
     bitrateChart->addAxis(axisX, Qt::AlignBottom);
     bitrateSeriesRx->attachAxis(axisX);
     bitrateSeriesTx->attachAxis(axisX);
 
     axisY = new QValueAxis();
-    axisY->setRange(0, 2000); // 0-2000 кбит/с
-    axisY->setTitleText("кбит/с");
+    axisY->setRange(0, 10); // 0-10 Мбит/с по умолчанию
+    axisY->setTitleText("Мбит/с");
+    axisY->setTickCount(6);
     bitrateChart->addAxis(axisY, Qt::AlignLeft);
     bitrateSeriesRx->attachAxis(axisY);
     bitrateSeriesTx->attachAxis(axisY);
@@ -123,15 +131,13 @@ void ChatWindow::updateBitrateChart()
     qint64 currentSent = totalBytesSent;
     qint64 currentReceived = totalBytesReceived;
 
-    // Рассчитываем битрейт (кбит/с)
+    // Рассчитываем битрейт (Мбит/с)
     qreal bitsSent = (currentSent - lastUpdateBytesSent) * 8;  // Байты → биты
     qreal secondsElapsed = elapsed / 1000.0;                  // мс → секунды
     qreal sendMbps = bitsSent / secondsElapsed / 1'000'000.0;
 
-
-    qreal bitsReceived = (currentReceived - lastUpdateBytesReceived) * 8;  // Байты → биты                           // мс → секунды
+    qreal bitsReceived = (currentReceived - lastUpdateBytesReceived) * 8;
     qreal receivedMbps = bitsReceived / secondsElapsed / 1'000'000.0;
-
 
     lastUpdateBytesSent = currentSent;
     lastUpdateBytesReceived = currentReceived;
@@ -154,16 +160,22 @@ void ChatWindow::updateBitrateChart()
         bitrateSeriesTx->append(i, bitrateHistoryTx.at(i));
     }
 
-    // Автомасштабирование оси Y
+    // Автомасштабирование оси Y с разумными пределами
     qreal maxRx = *std::max_element(bitrateHistoryRx.begin(), bitrateHistoryRx.end());
     qreal maxTx = *std::max_element(bitrateHistoryTx.begin(), bitrateHistoryTx.end());
     qreal max = qMax(maxRx, maxTx);
-    axisY->setRange(0, qMax(100.0, max * 1.1));
+
+    // Устанавливаем верхний предел с запасом 20%, но не менее 2 Мбит/с
+    qreal upperLimit = qMax(2.0, max * 1.2);
+    // И не более 100 Мбит/с, чтобы не терять детализацию при обычных значениях
+    upperLimit = qMin(100.0, upperLimit);
+
+    axisY->setRange(0, upperLimit);
 
     // Обновляем статус в заголовке
     bitrateChart->setTitle(QString("Битрейт | TX: %1 Мбит/с RX: %2 Мбит/с")
-                               .arg(sendMbps, 0, 'f', 1)
-                               .arg(receivedMbps, 0, 'f', 1));
+                               .arg(sendMbps, 0, 'f', 2)
+                               .arg(receivedMbps, 0, 'f', 2));
 }
 
 void ChatWindow::timerEvent(QTimerEvent *event)
