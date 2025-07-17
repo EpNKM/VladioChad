@@ -47,6 +47,11 @@
     private:
         Ui::ChatWindow *ui;
 
+        int videoTotalPackets;
+        int videoLostPackets;
+        double videoPacketLossRate;
+        qint64 lastVideoSequence;
+
         // Video buffering
         QQueue<QImage> videoBuffer;
         int maxBufferSize = 5; // Количество кадров в буфере

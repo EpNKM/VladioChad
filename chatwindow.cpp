@@ -23,6 +23,10 @@ ChatWindow::ChatWindow(QWidget *parent)
     , totalPackets(0)
     , lostPackets(0)
     , lastSequence(-1)
+    , videoTotalPackets(0)
+    , videoLostPackets(0)
+    , videoPacketLossRate(0.0)
+    , lastVideoSequence(-1)
 {
     ui->setupUi(this);
     setWindowTitle("VladioChat");
@@ -212,22 +216,23 @@ void ChatWindow::logConnectionQuality()
     if (!isRemotePeerFound) {
         quality = "Нет соединения";
     }
-    else if (packetLossRate < 2.0) {
+    else if (packetLossRate < 2.0 && videoPacketLossRate < 2.0) {
         quality = "Качество связи: Отличное";
     }
-    else if (packetLossRate < 5.0) {
+    else if (packetLossRate < 5.0 && videoPacketLossRate < 5.0) {
         quality = "Качество связи: Хорошее";
     }
-    else if (packetLossRate < 10.0) {
+    else if (packetLossRate < 10.0 && videoPacketLossRate < 10.0) {
         quality = "Качество связи: Среднее";
     }
     else {
         quality = "Качество связи: Плохое";
     }
 
-    logMessage(quality + QString(" (Потери: %1%, Размер пакета: %2мс)")
+    logMessage(quality + QString("\nАудио - Потери: %1%, Размер пакета: %2мс\nВидео - Потери: %3%")
                              .arg(packetLossRate, 0, 'f', 1)
-                             .arg(currentPacketMs));
+                             .arg(currentPacketMs)
+                             .arg(videoPacketLossRate, 0, 'f', 1));
 }
 
 void ChatWindow::checkAudioTiming()
@@ -461,22 +466,33 @@ void ChatWindow::processAudioPacket(QDataStream &stream)
     QByteArray audioData;
     stream >> id >> name >> sequence >> audioData;
 
+    if (id == instanceId) return;
+
+    static int initialPackets = 0;
+    if (initialPackets < 5) {
+        initialPackets++;
+        lastSequence = sequence;
+        return;
+    }
+
     totalPackets++;
 
-    // Инициализация lastSequence при первом пакете
     if (lastSequence == -1) {
         lastSequence = sequence;
         return;
     }
 
-    // Подсчет пропущенных пакетов
-    if (sequence > lastSequence + 1) {
-        lostPackets += sequence - (lastSequence + 1);
-        updatePacketLossStats();
+    // Подсчет потерь только если sequence > lastSequence
+    if (sequence > lastSequence) {
+        lostPackets += qMax(0LL, sequence - lastSequence - 1);
+        lastSequence = sequence;
     }
-    lastSequence = sequence;
 
-    if (id == instanceId || !audioOutputDevice) return;
+    // Обновляем статистику потерь
+    packetLossRate = (totalPackets > 0) ?
+                         (double)lostPackets / (totalPackets + lostPackets) * 100.0 : 0.0;
+
+    if (!audioOutputDevice) return;
 
     if (BufferingEnabled) {
         QMutexLocker locker(&audioMutex);
@@ -573,10 +589,28 @@ void ChatWindow::processBufferedVideo()
 void ChatWindow::processVideoPacket(QDataStream &stream)
 {
     QString id, name;
+    qint64 sequence;
     QByteArray imageData;
-    stream >> id >> name >> imageData;
+    stream >> id >> name >> sequence >> imageData;
 
     if (id == instanceId) return;
+
+    videoTotalPackets++;
+
+    if (lastVideoSequence == -1) {
+        lastVideoSequence = sequence;
+        return;
+    }
+
+    // Подсчет пропущенных пакетов
+    if (sequence > lastVideoSequence + 1) {
+        videoLostPackets += sequence - (lastVideoSequence + 1);
+    }
+    lastVideoSequence = sequence;
+
+    // Обновляем статистику потерь
+    videoPacketLossRate = (videoTotalPackets > 0) ?
+                              (double)videoLostPackets / (videoTotalPackets + videoLostPackets) * 100.0 : 0.0;
 
     QImage image;
     if (image.loadFromData(imageData, "JPEG")) {
@@ -590,7 +624,6 @@ void ChatWindow::processVideoPacket(QDataStream &stream)
                 processBufferedVideo();
             }
         } else {
-            // Прямое отображение без буферизации
             QPixmap pixmap = QPixmap::fromImage(image.scaled(ui->remoteVideoLabel->size(),
                                                              Qt::KeepAspectRatio, Qt::SmoothTransformation));
             ui->remoteVideoLabel->setPixmap(pixmap);
@@ -735,9 +768,9 @@ void ChatWindow::videoFrameReady(const QVideoFrame &frame)
         ui->localVideoLabel->setPixmap(pixmap);
     }
 
-    // Отправка удаленному участнику
     if (!isRemotePeerFound || remoteAddress.isNull()) return;
 
+    static qint64 videoSequence = 0;
     image = image.scaled(640, 480, Qt::KeepAspectRatio);
     QByteArray imageData;
     QBuffer buffer(&imageData);
@@ -746,7 +779,7 @@ void ChatWindow::videoFrameReady(const QVideoFrame &frame)
 
     QByteArray packet;
     QDataStream stream(&packet, QIODevice::WriteOnly);
-    stream << QString("VIDEO") << instanceId << localNickname << imageData;
+    stream << QString("VIDEO") << instanceId << localNickname << ++videoSequence << imageData;
 
     qint64 bytesSent = udpSocket->writeDatagram(packet, remoteAddress, remotePort);
     if (bytesSent != -1) {
