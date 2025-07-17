@@ -27,6 +27,8 @@ ChatWindow::ChatWindow(QWidget *parent)
     ui->setupUi(this);
     setWindowTitle("VladioChat");
 
+    connect(ui->BufferCheckBox, &QCheckBox::stateChanged, this, &ChatWindow::on_BufferCheckBox_stateChanged);
+
     // Инициализация
     instanceId = QUuid::createUuid().toString();
     localNickname = "User_" + QString::number(QRandomGenerator::global()->bounded(1000));
@@ -67,27 +69,6 @@ ChatWindow::~ChatWindow()
     }
     videoTimer.stop();
     delete ui;
-}
-
-void ChatWindow::on_videoBufferCheckBox_stateChanged(int state)
-{
-    videoBufferingEnabled = (state == Qt::Checked);
-    ui->bufferSizeSpinBox->setEnabled(videoBufferingEnabled);
-    ui->applyBufferButton->setEnabled(videoBufferingEnabled);
-
-    if (!videoBufferingEnabled) {
-        QMutexLocker locker(&videoMutex);
-        videoBuffer.clear();
-    }
-    logMessage(QString("Буферизация видео %1")
-                   .arg(videoBufferingEnabled ? "включена" : "отключена"));
-}
-
-void ChatWindow::on_audioBufferCheckBox_stateChanged(int state)
-{
-    audioBufferingEnabled = (state == Qt::Checked);
-    logMessage(QString("Буферизация аудио %1")
-                   .arg(audioBufferingEnabled ? "включена" : "отключена"));
 }
 
 void ChatWindow::setupBitrateChart()
@@ -260,10 +241,28 @@ void ChatWindow::checkAudioTiming()
     }
 }
 
+void ChatWindow::on_BufferCheckBox_stateChanged(int state)
+{
+    BufferingEnabled = (state == Qt::Checked);
+
+
+    if (!BufferingEnabled) {
+        // Очищаем оба буфера при отключении
+        QMutexLocker videoLocker(&videoMutex);
+        videoBuffer.clear();
+
+        QMutexLocker audioLocker(&audioMutex);
+        audioQueue.clear();
+    }
+
+    logMessage(QString("Буферизация %1")
+                   .arg(BufferingEnabled ? "включена" : "отключена"));
+}
+
 void ChatWindow::updatePacketLossStats()
 {
     if (totalPackets > 0) {
-        packetLossRate = (double)lostPackets / totalPackets * 100.0;
+        packetLossRate = (double)lostPackets / (totalPackets + lostPackets) * 100.0;
         logConnectionQuality();
     }
 }
@@ -452,15 +451,22 @@ void ChatWindow::processAudioPacket(QDataStream &stream)
 
     totalPackets++;
 
-    if (lastSequence != -1 && sequence > lastSequence + 1) {
-        lostPackets += sequence - lastSequence - 1;
+    // Инициализация lastSequence при первом пакете
+    if (lastSequence == -1) {
+        lastSequence = sequence;
+        return;
+    }
+
+    // Подсчет пропущенных пакетов
+    if (sequence > lastSequence + 1) {
+        lostPackets += sequence - (lastSequence + 1);
         updatePacketLossStats();
     }
     lastSequence = sequence;
 
     if (id == instanceId || !audioOutputDevice) return;
 
-    if (audioBufferingEnabled) {
+    if (BufferingEnabled) {
         QMutexLocker locker(&audioMutex);
         audioQueue.enqueue(audioData);
         while (audioQueue.size() > TARGET_QUEUE_SIZE * 2) {
@@ -470,7 +476,6 @@ void ChatWindow::processAudioPacket(QDataStream &stream)
             audioOutputDevice->write(audioQueue.dequeue());
         }
     } else {
-        // Прямая передача без буферизации
         audioOutputDevice->write(audioData);
     }
 }
@@ -563,7 +568,7 @@ void ChatWindow::processVideoPacket(QDataStream &stream)
 
     QImage image;
     if (image.loadFromData(imageData, "JPEG")) {
-        if (videoBufferingEnabled) {
+        if (BufferingEnabled) {
             QMutexLocker locker(&videoMutex);
             videoBuffer.enqueue(image);
             while (videoBuffer.size() > maxBufferSize) {
@@ -678,7 +683,7 @@ void ChatWindow::resetConnection()
     packetLossRate = 0.0;
     totalPackets = 0;
     lostPackets = 0;
-    lastSequence = -1;
+    lastSequence = -1;  // Сбрасываем в начальное состояние
 
     {
         QMutexLocker locker(&audioMutex);

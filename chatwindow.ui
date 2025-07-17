@@ -18,7 +18,7 @@
     <item>
      <widget class="QTabWidget" name="tabWidget">
       <property name="currentIndex">
-       <number>0</number>
+       <number>3</number>
       </property>
       <widget class="QWidget" name="remoteVideoTab">
        <attribute name="title">
@@ -134,7 +134,7 @@ li.checked::marker { content: &quot;\2612&quot;; }
         <item>
          <widget class="QGroupBox" name="videoSettingsGroup">
           <property name="title">
-           <string>Настройки видео</string>
+           <string>Настройки буфера</string>
           </property>
           <layout class="QFormLayout" name="formLayout_2">
            <item row="0" column="0">
@@ -191,12 +191,12 @@ li.checked::marker { content: &quot;\2612&quot;; }
            <item row="2" column="0">
             <widget class="QLabel" name="label_5">
              <property name="text">
-              <string>Буферизация видео:</string>
+              <string>Буферизация:</string>
              </property>
             </widget>
            </item>
            <item row="2" column="1">
-            <widget class="QCheckBox" name="videoBufferCheckBox">
+            <widget class="QCheckBox" name="BufferCheckBox">
              <property name="text">
               <string>Включить буферизацию</string>
              </property>
@@ -211,20 +211,13 @@ li.checked::marker { content: &quot;\2612&quot;; }
         <item>
          <widget class="QGroupBox" name="audioSettingsGroup">
           <property name="title">
-           <string>Настройки аудио</string>
+           <string>Статус системы</string>
           </property>
           <layout class="QFormLayout" name="formLayout">
-           <item row="0" column="0">
-            <widget class="QLabel" name="label">
+           <item row="1" column="1">
+            <widget class="QLabel" name="audioFormatLabel">
              <property name="text">
-              <string>Размер аудио пакета (мс):</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="1">
-            <widget class="QLabel" name="audioPacketSizeLabel">
-             <property name="text">
-              <string>40</string>
+              <string>48000 Hz, 1 канал</string>
              </property>
             </widget>
            </item>
@@ -235,47 +228,28 @@ li.checked::marker { content: &quot;\2612&quot;; }
              </property>
             </widget>
            </item>
-           <item row="1" column="1">
-            <widget class="QLabel" name="audioFormatLabel">
+           <item row="0" column="1">
+            <widget class="QLabel" name="audioPacketSizeLabel">
              <property name="text">
-              <string>48000 Hz, 1 канал</string>
+              <string>40</string>
              </property>
             </widget>
            </item>
-           <item row="2" column="0">
-            <widget class="QLabel" name="label_6">
+           <item row="0" column="0">
+            <widget class="QLabel" name="label">
              <property name="text">
-              <string>Буферизация аудио:</string>
+              <string>Размер аудио пакета (мс):</string>
              </property>
             </widget>
            </item>
-           <item row="2" column="1">
-            <widget class="QCheckBox" name="audioBufferCheckBox">
-             <property name="text">
-              <string>Включить буферизацию</string>
-             </property>
-             <property name="checked">
-              <bool>false</bool>
-             </property>
-            </widget>
-           </item>
-          </layout>
-         </widget>
-        </item>
-        <item>
-         <widget class="QGroupBox" name="statusGroupBox">
-          <property name="title">
-           <string>Статус системы</string>
-          </property>
-          <layout class="QVBoxLayout" name="verticalLayout_9">
-           <item>
+           <item row="3" column="0">
             <widget class="QLabel" name="connectionStatusLabel">
              <property name="text">
               <string>Соединение: не установлено</string>
              </property>
             </widget>
            </item>
-           <item>
+           <item row="2" column="0">
             <widget class="QLabel" name="qualityStatusLabel">
              <property name="text">
               <string>Качество связи: неизвестно</string>
