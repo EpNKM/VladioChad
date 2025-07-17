@@ -54,8 +54,8 @@ private:
     int maxBufferSize = 5; // Количество кадров в буфере
     QMutex videoMutex;
 
-    bool videoBufferingEnabled = true;
-    bool audioBufferingEnabled = true;
+    bool videoBufferingEnabled = false;
+    bool audioBufferingEnabled = false;
 
     void processBufferedVideo();
 

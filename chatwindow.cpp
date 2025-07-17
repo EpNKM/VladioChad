@@ -139,15 +139,21 @@ void ChatWindow::updateBitrateChart()
     qint64 currentReceived = totalBytesReceived;
 
     // Рассчитываем битрейт (кбит/с)
-    qreal sentKbps = (currentSent - lastUpdateBytesSent) * 8 / (qreal)elapsed / 1000.0;
-    qreal receivedKbps = (currentReceived - lastUpdateBytesReceived) * 8 / (qreal)elapsed / 1000.0;
+    qreal bitsSent = (currentSent - lastUpdateBytesSent) * 8;  // Байты → биты
+    qreal secondsElapsed = elapsed / 1000.0;                  // мс → секунды
+    qreal sendMbps = bitsSent / secondsElapsed / 1'000'000.0;
+
+
+    qreal bitsReceived = (currentReceived - lastUpdateBytesReceived) * 8;  // Байты → биты                           // мс → секунды
+    qreal receivedMbps = bitsReceived / secondsElapsed / 1'000'000.0;
+
 
     lastUpdateBytesSent = currentSent;
     lastUpdateBytesReceived = currentReceived;
 
     // Сохраняем историю (60 секунд)
-    bitrateHistoryRx.append(receivedKbps);
-    bitrateHistoryTx.append(sentKbps);
+    bitrateHistoryRx.append(receivedMbps);
+    bitrateHistoryTx.append(sendMbps);
 
     if (bitrateHistoryRx.size() > 60) {
         bitrateHistoryRx.removeFirst();
@@ -170,9 +176,9 @@ void ChatWindow::updateBitrateChart()
     axisY->setRange(0, qMax(100.0, max * 1.1));
 
     // Обновляем статус в заголовке
-    bitrateChart->setTitle(QString("Битрейт | TX: %1 кбит/с RX: %2 кбит/с")
-                               .arg(sentKbps, 0, 'f', 1)
-                               .arg(receivedKbps, 0, 'f', 1));
+    bitrateChart->setTitle(QString("Битрейт | TX: %1 Мбит/с RX: %2 Мбит/с")
+                               .arg(sendMbps, 0, 'f', 1)
+                               .arg(receivedMbps, 0, 'f', 1));
 }
 
 void ChatWindow::timerEvent(QTimerEvent *event)
@@ -626,9 +632,11 @@ void ChatWindow::on_sendButton_clicked()
     QDataStream stream(&packet, QIODevice::WriteOnly);
     stream << QString("MSG") << instanceId << localNickname << text;
 
-    if (udpSocket->writeDatagram(packet, remoteAddress, remotePort) == -1) {
+    qint64 bytesSent = udpSocket->writeDatagram(packet, remoteAddress, remotePort);
+    if (bytesSent == -1) {
         logMessage("Ошибка отправки сообщения");
     } else {
+        totalBytesSent += bytesSent;
         ui->chatArea->append("<b>Я:</b> " + text);
         ui->messageEdit->clear();
     }
@@ -718,5 +726,9 @@ void ChatWindow::videoFrameReady(const QVideoFrame &frame)
     QByteArray packet;
     QDataStream stream(&packet, QIODevice::WriteOnly);
     stream << QString("VIDEO") << instanceId << localNickname << imageData;
-    udpSocket->writeDatagram(packet, remoteAddress, remotePort);
+
+    qint64 bytesSent = udpSocket->writeDatagram(packet, remoteAddress, remotePort);
+    if (bytesSent != -1) {
+        totalBytesSent += bytesSent;
+    }
 }
