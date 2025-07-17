@@ -51,6 +51,10 @@ ChatWindow::ChatWindow(QWidget *parent)
             this, &ChatWindow::on_applyBufferButton_clicked);
 
     setupBitrateChart();
+
+    showMaximized();
+
+    ui->tabWidget->setCurrentWidget(ui->remoteVideoTab);
 }
 
 
